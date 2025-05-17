@@ -23,12 +23,13 @@ echo "# IMPORTANT:"
 echo "#   - The script verifies that only compatible installation options are chosen:"
 echo "#       • OracleXE is not supported automatically."
 echo "#       • Varnish caching is only allowed with Nginx."
-echo "#   - After installation a log file ("installer.log") is created on your Desktop,"
+echo "#   - After installation a log file (\"installer.log\") is created on your Desktop,"
 echo "#     or in your home directory if Desktop does not exist."
-echo "#"
 echo "##########################################################################"
 
-# Detect distribution
+##########################################
+# Detect distribution and set commands   #
+##########################################
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     DISTRO=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
@@ -37,20 +38,42 @@ else
     exit 1
 fi
 
+# Define best PHP version helper.
+function best_php_version() {
+    # For Debian/Ubuntu, try to choose the highest available PHP package.
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if apt-cache show php8.2 >/dev/null 2>&1; then
+            echo "8.2"
+        elif apt-cache show php8.1 >/dev/null 2>&1; then
+            echo "8.1"
+        elif apt-cache show php8.0 >/dev/null 2>&1; then
+            echo "8.0"
+        else
+            echo "7.4"
+        fi
+    else
+        # For CentOS/RHEL–like systems using the Remi repository, default to 8.2
+        echo "8.2"
+    fi
+}
+
 # Set package manager commands and firewall choice based on distro.
 case $DISTRO in
     ubuntu|debian)
         PKG_INSTALL="apt install -y"
         PKG_UPDATE="apt update && apt upgrade -y"
+        PKG_REMOVE="apt purge -y"
         FIREWALL="ufw"
         ;;
     centos|rhel|rocky|almalinux)
         if command -v dnf >/dev/null 2>&1; then
             PKG_INSTALL="dnf install -y"
             PKG_UPDATE="dnf update -y"
+            PKG_REMOVE="dnf remove -y"
         else
             PKG_INSTALL="yum install -y"
             PKG_UPDATE="yum update -y"
+            PKG_REMOVE="yum remove -y"
         fi
         FIREWALL="firewalld"
         ;;
@@ -120,15 +143,6 @@ function check_compatibility() {
 #############################
 
 # Only prompt if not uninstalling.
-echo "Choose an operation:"
-select ACTION in "Install" "Upgrade" "Uninstall"; do
-    case $ACTION in
-        Install ) MODE="install"; break;;
-        Upgrade ) MODE="upgrade"; break;;
-        Uninstall ) MODE="uninstall"; break;;
-    esac
-done
-
 if [[ "$MODE" != "uninstall" ]]; then
     read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
     echo
@@ -136,8 +150,11 @@ if [[ "$MODE" != "uninstall" ]]; then
     IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
     read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
     DOC_ROOT=${DOC_ROOT:-/var/www/html}
-    echo "Select PHP version:"
-    select PHP_VERSION in "7.4" "8.0" "8.1" "8.2"; do break; done
+    
+    # Automatically select the best PHP version.
+    PHP_VERSION=$(best_php_version)
+    echo "Auto-selected best PHP version: $PHP_VERSION"
+    
     echo "Select database engine:"
     select DB_ENGINE in "MySQL" "MariaDB" "PostgreSQL" "SQLite" "Percona" "MongoDB" "OracleXE"; do break; done
     echo "Install optional tools (git, curl, htop, zip, etc.)?"
@@ -766,6 +783,18 @@ function install_lamp() {
 # Execution Based on Mode         #
 ###################################
 
+# Determine operation mode if not already set.
+if [ -z "$MODE" ]; then
+    echo "Choose an operation:"
+    select ACTION in "Install" "Upgrade" "Uninstall"; do
+        case $ACTION in
+            Install ) MODE="install"; break;;
+            Upgrade ) MODE="upgrade"; break;;
+            Uninstall ) MODE="uninstall"; break;;
+        esac
+    done
+fi
+
 case $MODE in
     install)
         install_lamp
@@ -778,17 +807,24 @@ case $MODE in
     uninstall)
         echo "Uninstalling installed components..."
         systemctl stop apache2 nginx caddy lighttpd mysql mariadb postgresql mongod 2>/dev/null || true
-        eval $PKG_INSTALL apache2 apache2-utils nginx caddy lighttpd mysql-server mariadb-server percona-server-server postgresql php* certbot "$FIREWALL" vsftpd unattended-upgrades fail2ban redis-server memcached varnish rabbitmq-server
+        # Use PKG_REMOVE to purge installed packages.
+        eval $PKG_REMOVE apache2 apache2-utils nginx caddy lighttpd mysql-server mariadb-server percona-server-server postgresql php* certbot "$FIREWALL" vsftpd unattended-upgrades fail2ban redis-server memcached varnish rabbitmq-server
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
             apt autoremove -y && apt autoclean
-        else
-            eval $PKG_UPDATE
+        elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
+            if command -v dnf >/dev/null 2>&1; then
+                dnf autoremove -y
+            else
+                yum autoremove -y
+            fi
         fi
-        rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban
+        # Remove configuration and data directories.
+        rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
         if [ "$FIREWALL" == "ufw" ]; then
             ufw disable || true
         else
             systemctl stop firewalld || true
+            systemctl disable firewalld || true
         fi
         echo "Components uninstalled."
         ;;
@@ -833,5 +869,3 @@ for line in "${ART[@]}"; do
   done
   echo -e "${NC}"
 done
-
-
