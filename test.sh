@@ -1,5 +1,6 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+IFS=$'\n\t'
 
 echo "##########################################################################"
 echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
@@ -28,9 +29,10 @@ echo "#     or in your home directory if Desktop does not exist."
 echo "##########################################################################"
 
 ##########################################
-# Detect distribution and set commands   #
+# Detect distribution and set constants  #
 ##########################################
-if [ -f /etc/os-release ]; then
+if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
     . /etc/os-release
     DISTRO=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
 else
@@ -38,43 +40,12 @@ else
     exit 1
 fi
 
-# Define best PHP version helper.
-function best_php_version() {
-    # For Debian/Ubuntu, try to choose the highest available PHP package.
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        if apt-cache show php8.2 >/dev/null 2>&1; then
-            echo "8.2"
-        elif apt-cache show php8.1 >/dev/null 2>&1; then
-            echo "8.1"
-        elif apt-cache show php8.0 >/dev/null 2>&1; then
-            echo "8.0"
-        else
-            echo "7.4"
-        fi
-    else
-        # For CentOS/RHEL–like systems using the Remi repository, default to 8.2
-        echo "8.2"
-    fi
-}
-
-# Set package manager commands and firewall choice based on distro.
+# For RPM–based distros, we’ll be using dnf if available.
 case $DISTRO in
     ubuntu|debian)
-        PKG_INSTALL="apt install -y"
-        PKG_UPDATE="apt update && apt upgrade -y"
-        PKG_REMOVE="apt purge -y"
         FIREWALL="ufw"
         ;;
     centos|rhel|rocky|almalinux)
-        if command -v dnf >/dev/null 2>&1; then
-            PKG_INSTALL="dnf install -y"
-            PKG_UPDATE="dnf update -y"
-            PKG_REMOVE="dnf remove -y"
-        else
-            PKG_INSTALL="yum install -y"
-            PKG_UPDATE="yum update -y"
-            PKG_REMOVE="yum remove -y"
-        fi
         FIREWALL="firewalld"
         ;;
     *)
@@ -83,41 +54,71 @@ case $DISTRO in
         ;;
 esac
 
-echo "-------------------------------------------------------"
-echo " 🚀 Enhanced Multi‑Engine Server Installer for $PRETTY_NAME"
-echo "-------------------------------------------------------"
-echo "This script is designed for a fresh $PRETTY_NAME installation."
-echo "WARNING: Improper SSH changes can lock you out. Ensure you use key‑based authentication."
-echo "-------------------------------------------------------"
+##########################################
+# Package Management Helper Functions    #
+##########################################
+
+pkg_update() {
+    echo "Updating system..."
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if command -v apt-fast >/dev/null 2>&1; then
+            apt-fast update && apt-fast upgrade -y
+        else
+            apt-get update && apt-get upgrade -y
+        fi
+    else
+        if command -v dnf >/dev/null 2>&1; then
+            dnf update -y
+        else
+            yum update -y
+        fi
+    fi
+}
+
+pkg_install() {
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        apt-get install -y "$@"
+    else
+        if command -v dnf >/dev/null 2>&1; then
+            dnf install -y "$@"
+        else
+            yum install -y "$@"
+        fi
+    fi
+}
+
+pkg_remove() {
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        apt-get purge -y "$@"
+    else
+        if command -v dnf >/dev/null 2>&1; then
+            dnf remove -y "$@"
+        else
+            yum remove -y "$@"
+        fi
+    fi
+}
 
 ###################################
 # Pre‑Installation Functions      #
 ###################################
 
-function update_system() {
-    echo "Updating system using: $PKG_UPDATE"
-    # Use apt-fast if available on Debian/Ubuntu
-    if command -v apt-fast >/dev/null 2>&1; then
-        apt-fast update && apt-fast upgrade -y
-    else
-        eval $PKG_UPDATE
-    fi
+update_system() {
+    pkg_update
 }
 
-function install_prerequisites() {
+install_prerequisites() {
     update_system
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        eval $PKG_INSTALL software-properties-common openssh-server ufw fail2ban
+        pkg_install software-properties-common openssh-server ufw fail2ban
     else
-        # For RedHat–based systems, install openssh-server, firewalld, and fail2ban.
-        eval $PKG_INSTALL openssh-server firewalld fail2ban
-        # Optionally install EPEL if not already installed.
+        pkg_install openssh-server firewalld fail2ban
         if ! rpm -q epel-release >/dev/null 2>&1; then
-            eval $PKG_INSTALL epel-release
+            pkg_install epel-release
         fi
     fi
-    if [[ "$INSTALL_UTILS" = true ]]; then
-        eval $PKG_INSTALL git curl htop zip unzip
+    if [[ "${INSTALL_UTILS:-false}" = true ]]; then
+        pkg_install git curl htop zip unzip
     fi
 }
 
@@ -125,7 +126,7 @@ function install_prerequisites() {
 # Compatibility Check Function #
 ################################
 
-function check_compatibility() {
+check_compatibility() {
     echo "Performing compatibility checks..."
     if [[ "$DB_ENGINE" == "OracleXE" ]]; then
         echo "Error: Oracle XE installation is not supported automatically. Exiting." >&2
@@ -138,11 +139,42 @@ function check_compatibility() {
     echo "All compatibility checks passed."
 }
 
-#############################
-# User Input Prompts        #
-#############################
+################################
+# Best PHP Version Selection   #
+################################
 
-# Only prompt if not uninstalling.
+best_php_version() {
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if apt-cache show php8.2 >/dev/null 2>&1; then
+            echo "8.2"
+        elif apt-cache show php8.1 >/dev/null 2>&1; then
+            echo "8.1"
+        elif apt-cache show php8.0 >/dev/null 2>&1; then
+            echo "8.0"
+        else
+            echo "7.4"
+        fi
+    else
+        echo "8.2"
+    fi
+}
+
+################################
+# User Input Prompts           #
+################################
+
+# Determine operation if MODE is not set already.
+if [[ -z "${MODE:-}" ]]; then
+    echo "Choose an operation:"
+    select ACTION in "Install" "Upgrade" "Uninstall"; do
+        case $ACTION in
+            Install ) MODE="install"; break;;
+            Upgrade ) MODE="upgrade"; break;;
+            Uninstall ) MODE="uninstall"; break;;
+        esac
+    done
+fi
+
 if [[ "$MODE" != "uninstall" ]]; then
     read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
     echo
@@ -151,7 +183,7 @@ if [[ "$MODE" != "uninstall" ]]; then
     read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
     DOC_ROOT=${DOC_ROOT:-/var/www/html}
     
-    # Automatically select the best PHP version.
+    # Auto-select the best PHP version.
     PHP_VERSION=$(best_php_version)
     echo "Auto-selected best PHP version: $PHP_VERSION"
     
@@ -197,7 +229,7 @@ if [[ "$MODE" != "uninstall" ]]; then
     check_compatibility
 
     # Setup log file redirection.
-    if [ -d "$HOME/Desktop" ]; then
+    if [[ -d "$HOME/Desktop" ]]; then
          LOGFILE="$HOME/Desktop/installer.log"
     else
          LOGFILE="$HOME/installer.log"
@@ -210,9 +242,9 @@ fi
 # Helper and Modular Functions    #
 ###################################
 
-function setup_firewall() {
+setup_firewall() {
     echo "Configuring firewall..."
-    if [ "$FIREWALL" == "ufw" ]; then
+    if [[ "$FIREWALL" == "ufw" ]]; then
         ufw allow OpenSSH
         if [[ "$WEB_SERVER" == "Nginx" || "$WEB_SERVER" == "Caddy" || "$WEB_SERVER" == "Lighttpd" ]]; then
             ufw allow 'Nginx Full' 2>/dev/null || true
@@ -225,7 +257,7 @@ function setup_firewall() {
     else
         systemctl start firewalld
         systemctl enable firewalld
-        if [ "$USE_HARDENED_SSH" = true ]; then
+        if [[ "$USE_HARDENED_SSH" == true ]]; then
             firewall-cmd --permanent --add-port=2222/tcp
         else
             firewall-cmd --permanent --add-service=ssh
@@ -240,51 +272,51 @@ function setup_firewall() {
 # Installation Functions for Engines #
 ######################################
 
-function install_php() {
-    echo "Installing PHP $PHP_VERSION and necessary modules..."
+install_php() {
+    echo "Installing PHP ${PHP_VERSION} and necessary modules..."
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        eval $PKG_INSTALL php$PHP_VERSION php$PHP_VERSION-cli php$PHP_VERSION-mysql php$PHP_VERSION-gd php$PHP_VERSION-curl php$PHP_VERSION-mbstring php$PHP_VERSION-xml php$PHP_VERSION-zip
+        pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
         if [[ "$DB_ENGINE" == "SQLite" ]]; then
-            eval $PKG_INSTALL php$PHP_VERSION-sqlite3 sqlite3
+            pkg_install "php${PHP_VERSION}-sqlite3" sqlite3
         fi
         if [[ "$WEB_SERVER" == "Nginx" || "$WEB_SERVER" == "Caddy" || "$WEB_SERVER" == "Lighttpd" ]]; then
-            eval $PKG_INSTALL php$PHP_VERSION-fpm
+            pkg_install "php${PHP_VERSION}-fpm"
         else
-            eval $PKG_INSTALL libapache2-mod-php$PHP_VERSION
+            pkg_install "libapache2-mod-php${PHP_VERSION}"
         fi
     else
         # For CentOS/RHEL-based systems, use the Remi repository.
         if ! rpm -q remi-release >/dev/null 2>&1; then
-            eval $PKG_INSTALL https://rpms.remirepo.net/enterprise/remi-release-8.rpm
+            pkg_install "https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
         fi
         if command -v dnf >/dev/null 2>&1; then
             dnf module reset php -y
-            dnf module enable php:remi-$PHP_VERSION -y
-            eval $PKG_INSTALL php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
+            dnf module enable php:remi-"${PHP_VERSION}" -y
+            pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
             if [[ "$DB_ENGINE" == "SQLite" ]]; then
-                eval $PKG_INSTALL php-sqlite3 sqlite
+                pkg_install php-sqlite3 sqlite
             fi
         else
             yum module reset php -y
-            yum module enable php:remi-$PHP_VERSION -y
-            eval $PKG_INSTALL php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
+            yum module enable php:remi-"${PHP_VERSION}" -y
+            pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
             if [[ "$DB_ENGINE" == "SQLite" ]]; then
-                eval $PKG_INSTALL php-sqlite3 sqlite
+                pkg_install php-sqlite3 sqlite
             fi
         fi
     fi
 }
 
-function install_database() {
+install_database() {
     echo "Installing database engine: $DB_ENGINE"
-    # For RedHat–based distros, if MySQL is selected, we automatically switch to MariaDB.
+    # For RedHat–based distros, switch MySQL to MariaDB if needed.
     if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
         echo "MySQL is not available by default on $PRETTY_NAME; switching to MariaDB."
         DB_ENGINE="MariaDB"
     fi
     case $DB_ENGINE in
         "MySQL")
-            eval $PKG_INSTALL mysql-server
+            pkg_install mysql-server
             mysql_secure_installation <<EOF
 
 y
@@ -297,7 +329,7 @@ y
 EOF
             ;;
         "MariaDB")
-            eval $PKG_INSTALL mariadb-server
+            pkg_install mariadb-server
             mysql_secure_installation <<EOF
 
 y
@@ -310,14 +342,14 @@ y
 EOF
             ;;
         "PostgreSQL")
-            eval $PKG_INSTALL postgresql postgresql-contrib
+            pkg_install postgresql postgresql-contrib
             sudo -u postgres psql -c "ALTER USER postgres PASSWORD '$DB_PASSWORD';"
             ;;
         "SQLite")
             echo "SQLite is already installed with PHP support."
             ;;
         "Percona")
-            eval $PKG_INSTALL percona-server-server
+            pkg_install percona-server-server
             mysql_secure_installation <<EOF
 
 y
@@ -330,10 +362,11 @@ y
 EOF
             ;;
         "MongoDB")
-            wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | apt-key add -
-            echo "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+            # Use gpg --dearmor to add the MongoDB key.
+            wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
+            echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
             update_system
-            eval $PKG_INSTALL mongodb-org
+            pkg_install mongodb-org
             systemctl start mongod && systemctl enable mongod
             ;;
         "OracleXE")
@@ -342,22 +375,22 @@ EOF
     esac
 }
 
-function install_ftp_sftp() {
-    if [[ "$INSTALL_FTP" = true ]]; then
-        eval $PKG_INSTALL vsftpd
+install_ftp_sftp() {
+    if [[ "${INSTALL_FTP:-false}" = true ]]; then
+        pkg_install vsftpd
     fi
 }
 
-function install_cache() {
+install_cache() {
     case $CACHE_SETUP in
         "Redis")
-            eval $PKG_INSTALL redis-server
+            pkg_install redis-server
             ;;
         "Memcached")
-            eval $PKG_INSTALL memcached php$PHP_VERSION-memcached
+            pkg_install memcached "php${PHP_VERSION}-memcached"
             ;;
         "Varnish")
-            eval $PKG_INSTALL varnish
+            pkg_install varnish
             ;;
         "None")
             echo "No caching system selected."
@@ -365,13 +398,13 @@ function install_cache() {
     esac
 }
 
-function install_messaging_queue() {
+install_messaging_queue() {
     case $MSG_QUEUE in
         "RabbitMQ")
-            eval $PKG_INSTALL rabbitmq-server
+            pkg_install rabbitmq-server
             ;;
         "Kafka")
-            eval $PKG_INSTALL openjdk-11-jdk
+            pkg_install openjdk-11-jdk
             KAFKA_VERSION="2.8.1"
             KAFKA_SCALA="2.13"
             wget "https://downloads.apache.org/kafka/2.8.1/kafka_${KAFKA_SCALA}-${KAFKA_VERSION}.tgz" -O /tmp/kafka.tgz
@@ -388,40 +421,39 @@ function install_messaging_queue() {
 # Install Web Server & Virtual Host Setup  #
 ############################################
 
-function install_web_server() {
+install_web_server() {
     case $WEB_SERVER in
         "Nginx")
-            eval $PKG_INSTALL nginx
+            pkg_install nginx
             ;;
         "Apache")
-            eval $PKG_INSTALL apache2 apache2-utils
+            pkg_install apache2 apache2-utils
             ;;
         "Caddy")
             if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-                eval $PKG_INSTALL debian-keyring debian-archive-keyring apt-transport-https
+                pkg_install debian-keyring debian-archive-keyring apt-transport-https
                 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | tee /etc/apt/trusted.gpg.d/caddy-stable.asc
                 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
                 update_system
-                eval $PKG_INSTALL caddy
+                pkg_install caddy
             else
-                # On CentOS/RHEL–like systems, Caddy might be installed via binary or snap.
                 echo "Caddy installation on $PRETTY_NAME may require manual intervention."
             fi
             ;;
         "Lighttpd")
-            eval $PKG_INSTALL lighttpd
+            pkg_install lighttpd
             ;;
     esac
 }
 
-function setup_virtual_hosts() {
+setup_virtual_hosts() {
     echo "Setting up virtual hosts..."
     if [[ "$WEB_SERVER" == "Nginx" || "$WEB_SERVER" == "Apache" ]]; then
         for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
             DOMAIN=$(echo "$DOMAIN" | xargs)
             mkdir -p "$DOC_ROOT/$DOMAIN"
             if [[ "$WEB_SERVER" == "Nginx" ]]; then
-                cat <<EOF > /etc/nginx/sites-available/$DOMAIN
+                cat <<EOF > /etc/nginx/sites-available/"$DOMAIN"
 server {
     listen 80;
     server_name $DOMAIN;
@@ -432,16 +464,16 @@ server {
     }
     location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php$PHP_VERSION-fpm.sock;
+        fastcgi_pass unix:/var/run/php/php${PHP_VERSION}-fpm.sock;
     }
     location ~ /\.ht {
         deny all;
     }
 }
 EOF
-                ln -s /etc/nginx/sites-available/$DOMAIN /etc/nginx/sites-enabled/
+                ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/
             else
-                cat <<EOF > /etc/apache2/sites-available/$DOMAIN.conf
+                cat <<EOF > /etc/apache2/sites-available/"$DOMAIN".conf
 <VirtualHost *:80>
     ServerName $DOMAIN
     DocumentRoot $DOC_ROOT/$DOMAIN
@@ -453,7 +485,7 @@ EOF
     CustomLog \${APACHE_LOG_DIR}/$DOMAIN-access.log combined
 </VirtualHost>
 EOF
-                a2ensite "$DOMAIN.conf"
+                a2ensite "$DOMAIN".conf
             fi
         done
         if [[ "$WEB_SERVER" == "Nginx" ]]; then
@@ -464,11 +496,11 @@ EOF
         fi
         echo "Installing Certbot and obtaining SSL certificates..."
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-            eval $PKG_INSTALL certbot python3-certbot-$([[ "$WEB_SERVER" == "Nginx" ]] && echo "nginx" || echo "apache")
+            pkg_install certbot "python3-certbot-$([[ "$WEB_SERVER" == "Nginx" ]] && echo "nginx" || echo "apache")"
         else
-            eval $PKG_INSTALL certbot
+            pkg_install certbot
         fi
-        certbot --$WEB_SERVER -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m admin@"$(echo ${DOMAIN_ARRAY[0]} | xargs)" --redirect
+        certbot --$WEB_SERVER -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
     elif [[ "$WEB_SERVER" == "Caddy" ]]; then
         echo "Configuring Caddy using Caddyfile..."
         cat <<EOF > /etc/caddy/Caddyfile
@@ -480,7 +512,7 @@ $(for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
     echo "$DOMAIN {"
     echo "    root * $DOC_ROOT/$DOMAIN"
     echo "    file_server"
-    echo "    php_fastcgi unix//run/php/php$PHP_VERSION-fpm.sock"
+    echo "    php_fastcgi unix//run/php/php${PHP_VERSION}-fpm.sock"
     echo "}"
 done)
 EOF
@@ -501,15 +533,15 @@ EOF
 # Performance Optimizations #
 #############################
 
-function optimize_performance() {
+optimize_performance() {
     echo "Optimizing system performance..."
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
-    if [[ -f $PHP_INI ]]; then
-        cp $PHP_INI ${PHP_INI}.bak
-        sed -i 's/expose_php = On/expose_php = Off/' $PHP_INI
-        sed -i 's/display_errors = On/display_errors = Off/' $PHP_INI
-        if ! grep -q "opcache.enable" $PHP_INI; then
-            cat <<EOF >> $PHP_INI
+    if [[ -f "$PHP_INI" ]]; then
+        cp "$PHP_INI" "${PHP_INI}.bak"
+        sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
+        sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
+        if ! grep -q "opcache.enable" "$PHP_INI"; then
+            cat <<EOF >> "$PHP_INI"
 
 ; OPcache settings for production
 opcache.enable=1
@@ -522,7 +554,7 @@ EOF
         fi
     fi
     if [[ "$WEB_SERVER" == "Nginx" ]]; then
-        sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/${DOMAIN_ARRAY[0]}
+        sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
         if ! grep -q "gzip on;" /etc/nginx/nginx.conf; then
             sed -i 's/http {*/http { \ngzip on;\ngzip_vary on;\ngzip_proxied any;\ngzip_comp_level 6;\ngzip_min_length 256;\ngzip_types text\/plain application\/xml application\/javascript text\/css;/' /etc/nginx/nginx.conf
         fi
@@ -543,8 +575,8 @@ EOF
         systemctl restart mysql 2>/dev/null || systemctl restart mariadb
     elif [[ "$DB_ENGINE" == "PostgreSQL" ]]; then
         PG_CONF="/etc/postgresql/$(ls /etc/postgresql)/main/postgresql.conf"
-        sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" $PG_CONF
-        sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" $PG_CONF
+        sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" "$PG_CONF"
+        sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" "$PG_CONF"
         systemctl restart postgresql
     fi
 }
@@ -553,23 +585,23 @@ EOF
 # Security Hardening & SSH Configuration
 ########################################
 
-function security_harden() {
+security_harden() {
     echo "Starting security hardening procedures..."
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
-    if [[ -f $PHP_INI ]]; then
-        cp $PHP_INI ${PHP_INI}.sec.bak
-        sed -i 's/expose_php = On/expose_php = Off/' $PHP_INI
-        sed -i 's/display_errors = On/display_errors = Off/' $PHP_INI
-        if ! grep -q "disable_functions" $PHP_INI; then
-            echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source" >> $PHP_INI
+    if [[ -f "$PHP_INI" ]]; then
+        cp "$PHP_INI" "${PHP_INI}.sec.bak"
+        sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
+        sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
+        if ! grep -q "disable_functions" "$PHP_INI"; then
+            echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source" >> "$PHP_INI"
         fi
     fi
-    if [ "$USE_HARDENED_SSH" = true ]; then
+    if [[ "$USE_HARDENED_SSH" == true ]]; then
         harden_ssh_config
     else
         echo "Standard SSH configuration applied. No extra hardening."
     fi
-    if [ ! -f /etc/fail2ban/jail.local ]; then
+    if [[ ! -f /etc/fail2ban/jail.local ]]; then
         cat <<EOF >/etc/fail2ban/jail.local
 [DEFAULT]
 bantime = 3600
@@ -589,15 +621,15 @@ enabled = true
 enabled = true
 EOF
     fi
-    systemctl restart fail2ban
-    eval $PKG_INSTALL unattended-upgrades
+    pkg_install unattended-upgrades
     dpkg-reconfigure -plow unattended-upgrades || true
+    systemctl restart fail2ban
     echo "Security hardening complete."
 }
 
-function harden_ssh_config() {
+harden_ssh_config() {
     echo "Applying hardened SSH configuration..."
-    if [ -f /etc/ssh/sshd_config ]; then
+    if [[ -f /etc/ssh/sshd_config ]]; then
         cp /etc/ssh/sshd_config /etc/ssh/sshd_config.sshhardening.bak
         if ! grep -q "^Protocol" /etc/ssh/sshd_config; then
             echo "Protocol 2" >> /etc/ssh/sshd_config
@@ -622,8 +654,8 @@ function harden_ssh_config() {
         if ! grep -q "^KexAlgorithms" /etc/ssh/sshd_config; then
             echo "KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256" >> /etc/ssh/sshd_config
         fi
-        if [ -n "$SSH_ALLOWED_USERS" ]; then
-            sed -i 's/^#*AllowUsers.*/AllowUsers '"$SSH_ALLOWED_USERS"'/' /etc/ssh/sshd_config
+        if [[ -n "${SSH_ALLOWED_USERS:-}" ]]; then
+            sed -i "s/^#*AllowUsers.*/AllowUsers $SSH_ALLOWED_USERS/" /etc/ssh/sshd_config
         fi
         systemctl reload sshd
         echo "Hardened SSH configuration applied."
@@ -632,27 +664,27 @@ function harden_ssh_config() {
     fi
 }
 
-function setup_ssh_deployment() {
+setup_ssh_deployment() {
     echo "Setting up SSH deployment environment..."
-    eval $PKG_INSTALL openssh-server
-    if [[ "$SETUP_SSH_DEPLOY" = true ]]; then
+    pkg_install openssh-server
+    if [[ "${SETUP_SSH_DEPLOY:-false}" == true ]]; then
         read -p "Enter deployment username (default: deploy): " DEPLOY_USER
         DEPLOY_USER=${DEPLOY_USER:-deploy}
         if id "$DEPLOY_USER" &>/dev/null; then
             echo "User $DEPLOY_USER already exists."
         else
-            adduser --disabled-password --gecos "" $DEPLOY_USER
-            usermod -aG sudo $DEPLOY_USER
+            adduser --disabled-password --gecos "" "$DEPLOY_USER"
+            usermod -aG sudo "$DEPLOY_USER"
             echo "Created deployment user $DEPLOY_USER."
         fi
         DEPLOY_AUTH_DIR="/home/$DEPLOY_USER/.ssh"
         mkdir -p "$DEPLOY_AUTH_DIR"
         chmod 700 "$DEPLOY_AUTH_DIR"
         read -p "Enter public SSH key for $DEPLOY_USER (leave blank to skip): " DEPLOY_SSH_KEY
-        if [ -n "$DEPLOY_SSH_KEY" ]; then
+        if [[ -n "$DEPLOY_SSH_KEY" ]]; then
             echo "$DEPLOY_SSH_KEY" > "$DEPLOY_AUTH_DIR/authorized_keys"
             chmod 600 "$DEPLOY_AUTH_DIR/authorized_keys"
-            chown -R $DEPLOY_USER:$DEPLOY_USER "$DEPLOY_AUTH_DIR"
+            chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$DEPLOY_AUTH_DIR"
             echo "SSH key added for $DEPLOY_USER."
         else
             echo "No SSH key provided; skipping key configuration for $DEPLOY_USER."
@@ -665,7 +697,7 @@ function setup_ssh_deployment() {
 # Containerization & Automation Support  #
 ##########################################
 
-function generate_docker_compose() {
+generate_docker_compose() {
     echo "Generating Docker Compose file..."
     cat <<EOF > docker-compose.yml
 version: '3.8'
@@ -736,7 +768,7 @@ EOF
     echo "Docker Compose file generated: docker-compose.yml"
 }
 
-function generate_ansible_playbook() {
+generate_ansible_playbook() {
     echo "Generating Ansible playbook..."
     cat <<EOF > site.yml
 - hosts: all
@@ -758,7 +790,7 @@ EOF
 # Main Installation Routine       #
 ###################################
 
-function install_lamp() {
+install_lamp() {
     install_prerequisites
     install_php
     install_database
@@ -771,10 +803,10 @@ function install_lamp() {
     setup_firewall
     security_harden
     setup_ssh_deployment
-    if [ "$GENERATE_DOCKER" = true ]; then
+    if [[ "${GENERATE_DOCKER:-false}" == true ]]; then
         generate_docker_compose
     fi
-    if [ "$GENERATE_ANSIBLE" = true ]; then
+    if [[ "${GENERATE_ANSIBLE:-false}" == true ]]; then
         generate_ansible_playbook
     fi
 }
@@ -782,18 +814,6 @@ function install_lamp() {
 ###################################
 # Execution Based on Mode         #
 ###################################
-
-# Determine operation mode if not already set.
-if [ -z "$MODE" ]; then
-    echo "Choose an operation:"
-    select ACTION in "Install" "Upgrade" "Uninstall"; do
-        case $ACTION in
-            Install ) MODE="install"; break;;
-            Upgrade ) MODE="upgrade"; break;;
-            Uninstall ) MODE="uninstall"; break;;
-        esac
-    done
-fi
 
 case $MODE in
     install)
@@ -807,10 +827,9 @@ case $MODE in
     uninstall)
         echo "Uninstalling installed components..."
         systemctl stop apache2 nginx caddy lighttpd mysql mariadb postgresql mongod 2>/dev/null || true
-        # Use PKG_REMOVE to purge installed packages.
-        eval $PKG_REMOVE apache2 apache2-utils nginx caddy lighttpd mysql-server mariadb-server percona-server-server postgresql php* certbot "$FIREWALL" vsftpd unattended-upgrades fail2ban redis-server memcached varnish rabbitmq-server
+        pkg_remove apache2 apache2-utils nginx caddy lighttpd mysql-server mariadb-server percona-server-server postgresql "php*" certbot "$FIREWALL" vsftpd unattended-upgrades fail2ban redis-server memcached varnish rabbitmq-server
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-            apt autoremove -y && apt autoclean
+            apt-get autoremove -y && apt-get autoclean
         elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
             if command -v dnf >/dev/null 2>&1; then
                 dnf autoremove -y
@@ -818,9 +837,8 @@ case $MODE in
                 yum autoremove -y
             fi
         fi
-        # Remove configuration and data directories.
         rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
-        if [ "$FIREWALL" == "ufw" ]; then
+        if [[ "$FIREWALL" == "ufw" ]]; then
             ufw disable || true
         else
             systemctl stop firewalld || true
@@ -852,14 +870,13 @@ ART=(
 "    ▒██░   ░██▄▄▄▄██ ▒██    ▒██ ▒██▄█▓▒ ▒   ▒██░█▀  ░ ▐██▓░   ░█░ █ ░█▓▓█  ░██░▒██░    ░▓█▒  ░░██░▒▓▓▄ ▄██▒"
 "    ░██████▒▓█   ▓██▒▒██▒   ░██▒▒██▒ ░  ░   ░▓█  ▀█▓░ ██▒▓░   ░░██▒██▓▒▒█████▓ ░██████▒░▒█░   ░██░▒ ▓███▀ ░"
 "    ░ ▒░▓  ░▒▒   ▓▒█░░ ▒░   ░  ░▒▓▒░ ░  ░   ░▒▓███▀▒ ██▒▒▒    ░ ▓░▒ ▒ ░▒▓▒ ▒ ▒ ░ ▒░▓  ░ ▒ ░   ░▓  ░ ░▒ ▒  ░"
-"    ░ ░ ▒  ░ ▒   ▒▒ ░░  ░      ░░▒ ░        ▒░▒   ░▓██ ░▒░      ▒ ░ ░ ░░▒░ ░ ░ ░ ░ ▒  ░ ░      ▒ ░  ░  ▒  " 
+"    ░ ░ ▒  ░ ▒   ▒▒ ░░  ░      ░░▒ ░        ▒░▒   ░▓██ ░▒░      ▒ ░ ░ ░░▒░ ░ ░ ░ ▒  ░ ░      ▒ ░  ░  ▒  " 
 "      ░ ░    ░   ▒   ░      ░   ░░           ░    ░▒ ▒ ░░       ░   ░  ░░░ ░ ░   ░ ░    ░ ░    ▒ ░░      "  
 "        ░  ░     ░  ░       ░                ░     ░ ░            ░      ░         ░  ░        ░  ░ ░   "   
 "                                              ░░ ░                                            ░        "
 "##############################################Lamp by Wulfic################################################"
 )
 
-# Print each character with rotating colors
 color_index=0
 for line in "${ART[@]}"; do
   for (( i=0; i<${#line}; i++ )); do
