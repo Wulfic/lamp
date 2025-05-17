@@ -796,3 +796,42 @@ esac
 
 echo "✅ Installation, configuration, and additional engine deployments are complete!"
 echo "Detailed log file saved at: $LOGFILE"
+
+# ANSI color array for rainbow
+COLORS=(
+  '\033[0;31m' # Red
+  '\033[0;33m' # Yellow
+  '\033[0;32m' # Green
+  '\033[0;36m' # Cyan
+  '\033[0;34m' # Blue
+  '\033[0;35m' # Magenta
+)
+NC='\033[0m' # Reset color
+
+# ASCII Art for "Lamp by Wulfic"
+ART=(
+"     ██▓    ▄▄▄       ███▄ ▄███▓ ██▓███      ▄▄▄▄ ▓██   ██▓    █     █░█    ██  ██▓      █████▒██▓ ▄████▄  "
+"    ▓██▒   ▒████▄    ▓██▒▀█▀ ██▒▓██░  ██▒   ▓█████▄▒██  ██▒   ▓█░ █ ░█░██  ▓██▒▓██▒    ▓██   ▒▓██▒▒██▀ ▀█  "
+"    ▒██░   ▒██  ▀█▄  ▓██    ▓██░▓██░ ██▓▒   ▒██▒ ▄██▒██ ██░   ▒█░ █ ░█▓██  ▒██░▒██░    ▒████ ░▒██▒▒▓█    ▄ "
+"    ▒██░   ░██▄▄▄▄██ ▒██    ▒██ ▒██▄█▓▒ ▒   ▒██░█▀  ░ ▐██▓░   ░█░ █ ░█▓▓█  ░██░▒██░    ░▓█▒  ░░██░▒▓▓▄ ▄██▒"
+"    ░██████▒▓█   ▓██▒▒██▒   ░██▒▒██▒ ░  ░   ░▓█  ▀█▓░ ██▒▓░   ░░██▒██▓▒▒█████▓ ░██████▒░▒█░   ░██░▒ ▓███▀ ░"
+"    ░ ▒░▓  ░▒▒   ▓▒█░░ ▒░   ░  ░▒▓▒░ ░  ░   ░▒▓███▀▒ ██▒▒▒    ░ ▓░▒ ▒ ░▒▓▒ ▒ ▒ ░ ▒░▓  ░ ▒ ░   ░▓  ░ ░▒ ▒  ░"
+"    ░ ░ ▒  ░ ▒   ▒▒ ░░  ░      ░░▒ ░        ▒░▒   ░▓██ ░▒░      ▒ ░ ░ ░░▒░ ░ ░ ░ ░ ▒  ░ ░      ▒ ░  ░  ▒  " 
+"      ░ ░    ░   ▒   ░      ░   ░░           ░    ░▒ ▒ ░░       ░   ░  ░░░ ░ ░   ░ ░    ░ ░    ▒ ░░      "  
+"        ░  ░     ░  ░       ░                ░     ░ ░            ░      ░         ░  ░        ░  ░ ░   "   
+"                                              ░░ ░                                            ░        "
+"##############################################Lamp by Wulfic################################################"
+)
+
+# Print each character with rotating colors
+color_index=0
+for line in "${ART[@]}"; do
+  for (( i=0; i<${#line}; i++ )); do
+    char="${line:$i:1}"
+    printf "${COLORS[$color_index]}%s" "$char"
+    ((color_index=(color_index+1)%${#COLORS[@]}))
+  done
+  echo -e "${NC}"
+done
+
+
