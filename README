@@ -1,4 +1,128 @@
-PLASE RUN
+PLEASE RUN
 
 sudo chmod +x lamp.sh
 sudo ./lamp.sh
+
+
+Features!
+
+1. Multi-Distro Compatibility & Detection
+Automatic Distribution Detection: The script reads from /etc/os-release to determine which Linux distribution is running. It supports major distros including Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, and RHEL.
+
+Distro-Specific Package Manager Configuration: Based on the detected distro, the script sets variables for installing and updating packages. For example, it uses apt (or apt-fast if available) on Debian/Ubuntu systems and dnf or yum on Red Hat–based systems.
+
+Firewall Tool Decision: It chooses ufw for Ubuntu/Debian and firewalld for CentOS/RHEL–style distributions, ensuring that each system uses its native firewall management.
+
+2. Logging and Output Management
+Centralized Logging: Before starting the installation (for install/upgrade modes), the script creates a log file named installer.log either on your Desktop (if available) or in your home folder.
+
+Redirection of Output: All subsequent output (stdout and stderr) is redirected to this log file using tee, so you have a detailed record of every step for troubleshooting.
+
+3. User Interactivity and Customization Options
+The script interactively prompts the user for detailed configuration options:
+
+Operation Mode: Choose between Install, Upgrade, or Uninstall.
+
+Credential and Domain Configuration:
+
+Prompt for a default password to secure databases and admin panels.
+
+Accept one or more domain names as comma‑separated values.
+
+Specify the document root directory (defaulting to /var/www/html).
+
+PHP Configuration Options: Select from PHP versions 7.4, 8.0, 8.1, or 8.2.
+
+Database Engine Selection: Choose from a wide array of engines:
+
+MySQL (which auto-converts to MariaDB on Red Hat–like systems),
+
+MariaDB,
+
+PostgreSQL,
+
+SQLite,
+
+Percona Server,
+
+MongoDB, and
+
+OracleXE (with a compatibility check that prevents automatic installation).
+
+Optional Tools & Services:
+
+Utilities: Optionally install common tools such as git, curl, htop, zip, and unzip.
+
+FTP/SFTP Server: Choose to install vsftpd.
+
+Caching Layer: Select from Redis, Memcached, Varnish (with a check to ensure Varnish is only used with Nginx), or none.
+
+Messaging Queue: Option to install RabbitMQ, Kafka, or none.
+
+Web Server Selection: Choose one of the following web servers:
+
+Nginx
+
+Apache
+
+Caddy
+
+Lighttpd
+
+SSH Customization Options:
+
+Optionally set up a dedicated SSH deployment user, including prompts for adding an SSH public key.
+
+Decide whether to restrict SSH logins to specific usernames.
+
+Choose between a Standard SSH setup or a Hardened SSH configuration that enforces stricter security settings (for example, forcing SSH Protocol 2, disabling password authentication, changing the default port to 2222, and disabling agent/X11 forwarding).
+
+Containerization and Automation:
+
+Optionally generate a Docker Compose file that will create containers for your Web server, database service, caching service, and messaging queue based on your selections.
+
+Optionally generate a basic Ansible playbook for further configuration and automation.
+
+4. Compatibility Checks
+Before proceeding, the script runs automated compatibility checks:
+
+It prevents unsupported combinations, such as:
+
+OracleXE not being supported for an automatic installation.
+
+Varnish caching must only be chosen if the web server is Nginx.
+
+If an incompatible choice is detected, the script outputs an error and exits.
+
+5. Installation and Configuration Functions
+The script is organized into modular functions that handle specific tasks:
+
+System Update and Prerequisites Installation: Updates the system and installs essential packages using the appropriate package manager.
+
+PHP Installation: – Uses the Ondřej PHP PPA on Debian/Ubuntu or the Remi repository on Red Hat–based systems. – Installs PHP with modules needed for MySQL, GD, cURL, MBString, XML, ZIP; and, if SQLite is selected, it installs SQLite support as well. – Installs the PHP-FPM package if the selected web server is Nginx, Caddy, or Lighttpd; otherwise, installs the Apache PHP module.
+
+Database Engine Installation: Installs the chosen database engine with corresponding configuration steps. For example, it uses mysql_secure_installation for MySQL/MariaDB/Percona and adjusts for PostgreSQL or MongoDB, etc. On Red Hat–like systems, if MySQL is chosen, it automatically switches to MariaDB.
+
+FTP/SFTP Server Installation: Installs vsftpd if selected.
+
+Caching and Messaging Services: – Installs Redis, Memcached, or Varnish based on user choice, with automated package installation. – Installs RabbitMQ or Kafka if requested.
+
+Web Server Installation & Virtual Host Configuration: Installs the selected web server and creates virtual host configurations for each domain provided. – For Nginx and Apache, it also installs and configures Certbot for SSL auto‑configuration. – For Caddy, it creates a Caddyfile; for Lighttpd, it enables required modules.
+
+Performance Optimizations: Adjusts PHP’s configuration (disabling expose_php, turning off display of errors, and enabling OPcache with recommended parameters). – Also optimizes web server settings (such as enabling HTTP/2 and gzip compression) and adjusts database tuning parameters (like innodb_buffer_pool_size for MySQL/MariaDB).
+
+Security Hardening: – Further grooms the PHP configuration by disabling dangerous functions. – Invokes the hardened SSH configuration if selected, which applies best practices (e.g., forcing SSH Protocol 2, changing the default port to 2222, disabling root and password authentication, and setting connection timeouts). – Configures fail2ban with common jail rules and sets up unattended-upgrades.
+
+SSH Deployment Setup: – If enabled, creates a dedicated deployment user, sets up SSH key-based authentication, and ensures that the user’s SSH directory and permissions are properly configured.
+
+Containerization/Automation File Generation: – Optionally creates a Docker Compose file that defines services for the web server, database, caching, and messaging queue. – Optionally generates a basic Ansible playbook for further server automation.
+
+6. Operation Modes
+Install Mode: Runs the entire installation procedure, invoking all functions sequentially.
+
+Upgrade Mode: Updates the system and then re-runs the installation routines to upgrade packages and reconfigure services.
+
+Uninstall Mode: Removes all installed components, cleans up package data, and disables the firewall (or stops firewalld) as necessary.
+
+7. Conclusion and Final Output
+After the installation (or upgrade/uninstallation) processes are complete, the script prints a confirmation message and reminds you where the detailed log file is saved. This ensures you have a complete record of any errors or the steps executed during deployment.
