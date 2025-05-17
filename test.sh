@@ -11,6 +11,9 @@ if [[ "$DEBUG" == true ]]; then
   set -x
 fi
 
+# Default DOC_ROOT initialization to avoid unbound variable issues (especially during uninstall)
+DOC_ROOT=${DOC_ROOT:-/var/www/html}
+
 # Cleanup function
 cleanup() {
     if [[ -f /tmp/kafka.tgz ]]; then
