@@ -1,0 +1,4 @@
+PLASE RUN
+
+sudo chmod +x lamp.sh
+sudo ./lamp.sh
