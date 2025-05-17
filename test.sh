@@ -628,11 +628,14 @@ EOF
         fi
         echo "Installing Certbot and obtaining SSL certificates..."
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-            pkg_install certbot "python3-certbot-$([[ "$WEB_SERVER" == "Nginx" ]] && echo "nginx" || echo "apache")"
+            # Convert the web server name to lowercase for certbot plugin
+            CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
+            pkg_install certbot "python3-certbot-${CERTBOT_PLUGIN}"
         else
             pkg_install certbot
         fi
-        certbot --$WEB_SERVER -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
+        CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
+        certbot --${CERTBOT_PLUGIN} -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
     elif [[ "$WEB_SERVER" == "Caddy" ]]; then
         echo "Configuring Caddy using Caddyfile..."
         cat <<EOF > /etc/caddy/Caddyfile
