@@ -133,6 +133,29 @@ pkg_remove() {
     fi
 }
 
+# -------------------------------------------------------------------------------
+# New Helper Function: remove_if_installed
+# Checks if a package is installed before attempting to remove it.
+# -------------------------------------------------------------------------------
+remove_if_installed() {
+    local pkg="$1"
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if dpkg -s "$pkg" >/dev/null 2>&1; then
+            echo "Removing package: $pkg"
+            pkg_remove "$pkg" || echo "Warning: Failed to remove package $pkg"
+        else
+            echo "Package $pkg is not installed, skipping: $pkg"
+        fi
+    else
+        if rpm -q "$pkg" >/dev/null 2>&1; then
+            echo "Removing package: $pkg"
+            pkg_remove "$pkg" || echo "Warning: Failed to remove package $pkg"
+        else
+            echo "Package $pkg is not installed, skipping: $pkg"
+        fi
+    fi
+}
+
 ###################################
 # Pre‑Installation Functions      #
 ###################################
@@ -850,8 +873,40 @@ case $MODE in
         ;;
     uninstall)
         echo "Uninstalling installed components..."
-        systemctl stop apache2 nginx caddy lighttpd mysql mariadb postgresql mongod 2>/dev/null || true
-        pkg_remove apache2 apache2-utils nginx caddy lighttpd mysql-server mariadb-server percona-server-server postgresql "php*" certbot "$FIREWALL" vsftpd unattended-upgrades fail2ban redis-server memcached varnish rabbitmq-server
+        # First, stop all known services
+        for service in apache2 nginx caddy lighttpd mysql mariadb postgresql mongod; do
+            systemctl stop "$service" 2>/dev/null || true
+        done
+
+        # Define a list of packages to remove.
+        PACKAGES_TO_REMOVE=(
+            "apache2"
+            "apache2-utils"
+            "nginx"
+            "caddy"
+            "lighttpd"
+            "mysql-server"
+            "mariadb-server"
+            "percona-server-server"
+            "postgresql"
+            "php*"  # Note: This wildcard may need adjustment based on your environment.
+            "certbot"
+            "$FIREWALL"
+            "vsftpd"
+            "unattended-upgrades"
+            "fail2ban"
+            "redis-server"
+            "memcached"
+            "varnish"
+            "rabbitmq-server"
+        )
+
+        # Loop through each package and remove it if installed.
+        for pkg in "${PACKAGES_TO_REMOVE[@]}"; do
+            remove_if_installed "$pkg"
+        done
+
+        # Autoremove and autoclean packages.
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
             apt-get autoremove -y && apt-get autoclean
         elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
@@ -861,7 +916,11 @@ case $MODE in
                 yum autoremove -y
             fi
         fi
+
+        # Remove configuration directories and files.
         rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
+
+        # Disable firewall if applicable.
         if [[ "$FIREWALL" == "ufw" ]]; then
             ufw disable || true
         else
