@@ -28,6 +28,19 @@ echo "#   - After installation a log file (\"installer.log\") is created on your
 echo "#     or in your home directory if Desktop does not exist."
 echo "##########################################################################"
 
+# -------------------------------------------------------------------------------
+# Prompt for operation at the beginning. This gives the user a choice of
+# Install, Upgrade, or Uninstall before any other input is requested.
+# -------------------------------------------------------------------------------
+echo "Choose an operation:"
+select ACTION in "Install" "Upgrade" "Uninstall"; do
+    case $ACTION in
+        Install ) MODE="install"; break;;
+        Upgrade ) MODE="upgrade"; break;;
+        Uninstall ) MODE="uninstall"; break;;
+    esac
+done
+
 ##########################################
 # Detect distribution and set constants  #
 ##########################################
@@ -163,18 +176,7 @@ best_php_version() {
 # User Input Prompts           #
 ################################
 
-# Determine operation if MODE is not set already.
-if [[ -z "${MODE:-}" ]]; then
-    echo "Choose an operation:"
-    select ACTION in "Install" "Upgrade" "Uninstall"; do
-        case $ACTION in
-            Install ) MODE="install"; break;;
-            Upgrade ) MODE="upgrade"; break;;
-            Uninstall ) MODE="uninstall"; break;;
-        esac
-    done
-fi
-
+# For install and upgrade modes, request additional input.
 if [[ "$MODE" != "uninstall" ]]; then
     read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
     echo
@@ -362,7 +364,6 @@ y
 EOF
             ;;
         "MongoDB")
-            # Use gpg --dearmor to add the MongoDB key.
             wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
             echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
             update_system
