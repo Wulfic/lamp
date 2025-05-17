@@ -2,6 +2,27 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Global error trap: Prints a helpful message on error.
+trap 'echo "ERROR: An unexpected error occurred at line $LINENO: \"$BASH_COMMAND\"" >&2' ERR
+
+# Cleanup function to remove temporary files created during execution.
+cleanup() {
+    if [[ -f /tmp/kafka.tgz ]]; then
+        rm -f /tmp/kafka.tgz
+        echo "Cleaned up temporary files."
+    fi
+}
+trap cleanup EXIT
+
+# Centralized error logging function.
+log_error() {
+    local msg="$1"
+    echo "ERROR: $msg" >&2
+    if [[ -n "${LOGFILE:-}" ]]; then
+        echo "$(date +'%Y-%m-%d %T') ERROR: $msg" >> "$LOGFILE"
+    fi
+}
+
 echo "##########################################################################"
 echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
 echo "# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, and RHEL"
@@ -49,7 +70,7 @@ if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     DISTRO=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
 else
-    echo "Cannot detect operating system. Exiting."
+    log_error "Cannot detect operating system. Exiting."
     exit 1
 fi
 
@@ -62,7 +83,7 @@ case $DISTRO in
         FIREWALL="firewalld"
         ;;
     *)
-        echo "Unsupported distro: $DISTRO" >&2
+        log_error "Unsupported distro: $DISTRO"
         exit 1
         ;;
 esac
@@ -142,11 +163,11 @@ install_prerequisites() {
 check_compatibility() {
     echo "Performing compatibility checks..."
     if [[ "$DB_ENGINE" == "OracleXE" ]]; then
-        echo "Error: Oracle XE installation is not supported automatically. Exiting." >&2
+        log_error "Oracle XE installation is not supported automatically."
         exit 1
     fi
     if [[ "$CACHE_SETUP" == "Varnish" && "$WEB_SERVER" != "Nginx" ]]; then
-        echo "Error: Varnish caching is only supported with Nginx in this installer. Exiting." >&2
+        log_error "Varnish caching is only supported with Nginx in this installer."
         exit 1
     fi
     echo "All compatibility checks passed."
@@ -277,7 +298,12 @@ setup_firewall() {
 install_php() {
     echo "Installing PHP ${PHP_VERSION} and necessary modules..."
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
+        if ! pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysql" \
+                "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" \
+                "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"; then
+            log_error "Failed to install PHP modules."
+            exit 1
+        fi
         if [[ "$DB_ENGINE" == "SQLite" ]]; then
             pkg_install "php${PHP_VERSION}-sqlite3" sqlite3
         fi
@@ -320,7 +346,6 @@ install_database() {
         "MySQL")
             pkg_install mysql-server
             mysql_secure_installation <<EOF
-
 y
 $DB_PASSWORD
 $DB_PASSWORD
@@ -333,7 +358,6 @@ EOF
         "MariaDB")
             pkg_install mariadb-server
             mysql_secure_installation <<EOF
-
 y
 $DB_PASSWORD
 $DB_PASSWORD
@@ -353,7 +377,6 @@ EOF
         "Percona")
             pkg_install percona-server-server
             mysql_secure_installation <<EOF
-
 y
 $DB_PASSWORD
 $DB_PASSWORD
