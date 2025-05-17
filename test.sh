@@ -1,32 +1,32 @@
 #!/bin/bash
 set -e
 
-##########################################################################
-# Enhanced Multi‑Engine Server Installer & Deployment Script
-# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, and RHEL
-#
-# This script installs a flexible stack with options for:
-# • Multiple database engines:
-#     MySQL, MariaDB, PostgreSQL, SQLite, Percona Server, MongoDB, OracleXE
-# • Multiple web servers:
-#     Apache, Nginx, Caddy, Lighttpd
-# • Extended caching:
-#     Redis, Memcached, Varnish
-# • Messaging queues:
-#     RabbitMQ, Kafka
-# • Containerization & automation support:
-#     Docker Compose file generation, Ansible playbook export
-# • SSH Setup Options:
-#     Standard SSH or Hardened SSH (with Protocol 2, key‑only auth, custom ciphers, etc.)
-#
-# IMPORTANT:
-#   - The script verifies that only compatible installation options are chosen:
-#       • OracleXE is not supported automatically.
-#       • Varnish caching is only allowed with Nginx.
-#   - After installation a log file ("installer.log") is created on your Desktop,
-#     or in your home directory if Desktop does not exist.
-#
-##########################################################################
+echo"##########################################################################"
+echo"# Enhanced Multi‑Engine Server Installer & Deployment Script"
+echo"# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, and RHEL"
+echo"#"
+echo"# This script installs a flexible stack with options for:"
+echo"# • Multiple database engines:"
+echo"#     MySQL, MariaDB, PostgreSQL, SQLite, Percona Server, MongoDB, OracleXE"
+echo"# • Multiple web servers:"
+echo"#     Apache, Nginx, Caddy, Lighttpd"
+echo"# • Extended caching:"
+echo"#     Redis, Memcached, Varnish"
+echo"# • Messaging queues:"
+echo"#     RabbitMQ, Kafka"
+echo"# • Containerization & automation support:"
+echo"#     Docker Compose file generation, Ansible playbook export"
+echo"# • SSH Setup Options:"
+echo"#     Standard SSH or Hardened SSH (with Protocol 2, key‑only auth, custom ciphers, etc.)"
+echo"#"
+echo"# IMPORTANT:"
+echo"#   - The script verifies that only compatible installation options are chosen:"
+echo"#       • OracleXE is not supported automatically."
+echo"#       • Varnish caching is only allowed with Nginx."
+echo"#   - After installation a log file ("installer.log") is created on your Desktop,"
+echo"#     or in your home directory if Desktop does not exist."
+echo"#"
+echo"##########################################################################"
 
 # Detect distribution
 if [ -f /etc/os-release ]; then
