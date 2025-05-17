@@ -43,50 +43,9 @@ retry_command() {
   fi
 }
 
-# Enhanced pkg_install with retry and repo support
-pkg_install() {
-  local pkgs=("$@")
-  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-    if ! retry_command apt-get install -y "${pkgs[@]}"; then
-      echo "⚠️  Attempting to add missing repositories..."
-      apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
-
-      # Add common 3rd-party PPAs conditionally
-      for pkg in "${pkgs[@]}"; do
-        case $pkg in
-          php8.2*|php8.1*|php8.0*)
-            add-apt-repository ppa:ondrej/php -y
-            ;;
-          nginx)
-            add-apt-repository ppa:nginx/stable -y
-            ;;
-          *)
-            :
-            ;;
-        esac
-      done
-
-      apt-get update
-      retry_command apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-    fi
-  else
-    if command -v dnf >/dev/null 2>&1; then
-      if ! retry_command dnf install -y "${pkgs[@]}"; then
-        echo "⚠️  Trying to enable required repositories..."
-        dnf install -y epel-release || true
-        dnf config-manager --set-enabled powertools epel || true
-        retry_command dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-      fi
-    else
-      if ! retry_command yum install -y "${pkgs[@]}"; then
-        echo "⚠️  Trying to enable required repositories..."
-        yum install -y epel-release || true
-        yum-config-manager --enable epel || true
-        retry_command yum install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-      fi
-    fi
-  fi
-}
+# --- Enhanced pkg_install with repository support ---
+# (Note: later this function is overridden for DEBs; here we rework it in the package management helper section)
+# -------------------------------------------------------------------------------
 
 echo "##########################################################################"
 echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
@@ -115,8 +74,7 @@ echo "#     or in your home directory if Desktop does not exist."
 echo "##########################################################################"
 
 # -------------------------------------------------------------------------------
-# Prompt for operation at the beginning. This gives the user a choice of
-# Install, Upgrade, or Uninstall before any other input is requested.
+# Prompt for operation at the beginning.
 # -------------------------------------------------------------------------------
 echo "Choose an operation:"
 select ACTION in "Install" "Upgrade" "Uninstall"; do
@@ -174,8 +132,23 @@ pkg_update() {
     fi
 }
 
+# Modified pkg_install with repository additions for PHP and updated Nginx.
 pkg_install() {
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        # Add repositories for PHP and updated Nginx if needed.
+        for pkg in "$@"; do
+            case $pkg in
+                php8.2*|php8.1*|php8.0*)
+                    add-apt-repository -y ppa:ondrej/php
+                    ;;
+                nginx)
+                    add-apt-repository -y ppa:nginx/stable
+                    ;;
+                *)
+                    ;;
+            esac
+        done
+        apt-get update
         apt-get install -y "$@"
     else
         if command -v dnf >/dev/null 2>&1; then
@@ -200,7 +173,6 @@ pkg_remove() {
 
 # -------------------------------------------------------------------------------
 # New Helper Function: remove_if_installed
-# Checks if a package is installed before attempting to remove it.
 # -------------------------------------------------------------------------------
 remove_if_installed() {
     local pkg="$1"
@@ -285,7 +257,6 @@ best_php_version() {
 # User Input Prompts           #
 ################################
 
-# For install and upgrade modes, request additional input.
 if [[ "$MODE" != "uninstall" ]]; then
     read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
     echo
@@ -294,7 +265,6 @@ if [[ "$MODE" != "uninstall" ]]; then
     read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
     DOC_ROOT=${DOC_ROOT:-/var/www/html}
     
-    # Auto-select the best PHP version.
     PHP_VERSION=$(best_php_version)
     echo "Auto-selected best PHP version: $PHP_VERSION"
     
@@ -336,10 +306,14 @@ if [[ "$MODE" != "uninstall" ]]; then
         [[ "$ANSIBLE_OPTION" == "Yes" ]] && GENERATE_ANSIBLE=true || GENERATE_ANSIBLE=false; break
     done
 
-    # Run the compatibility checks.
+    # --- New Prompt: Install phpMyAdmin ---
+    echo "Install phpMyAdmin?"
+    select PHPMYADMIN_OPTION in "Yes" "No"; do
+        [[ "$PHPMYADMIN_OPTION" == "Yes" ]] && INSTALL_PHPMYADMIN=true || INSTALL_PHPMYADMIN=false; break
+    done
+
     check_compatibility
 
-    # Setup log file redirection.
     if [[ -d "$HOME/Desktop" ]]; then
          LOGFILE="$HOME/Desktop/installer.log"
     else
@@ -348,6 +322,23 @@ if [[ "$MODE" != "uninstall" ]]; then
     echo "Installation started at $(date)" > "$LOGFILE"
     exec > >(tee -a "$LOGFILE") 2>&1
 fi
+
+###################################
+# New Function: Install phpMyAdmin
+###################################
+install_phpmyadmin() {
+    echo "Installing phpMyAdmin..."
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        # Preconfigure apt to avoid interactive prompts.
+        echo "phpmyadmin phpmyadmin/dbconfig-install boolean true" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/app-password-confirm password $DB_PASSWORD" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/mysql/app-pass password $DB_PASSWORD" | debconf-set-selections
+        echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect" | debconf-set-selections
+        pkg_install phpmyadmin
+    else
+        echo "phpMyAdmin installation is not automated for this distribution."
+    fi
+}
 
 ###################################
 # Helper and Modular Functions    #
@@ -401,7 +392,6 @@ install_php() {
             pkg_install "libapache2-mod-php${PHP_VERSION}"
         fi
     else
-        # For CentOS/RHEL-based systems, use the Remi repository.
         if ! rpm -q remi-release >/dev/null 2>&1; then
             pkg_install "https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
         fi
@@ -425,7 +415,6 @@ install_php() {
 
 install_database() {
     echo "Installing database engine: $DB_ENGINE"
-    # For RedHat–based distros, switch MySQL to MariaDB if needed.
     if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
         echo "MySQL is not available by default on $PRETTY_NAME; switching to MariaDB."
         DB_ENGINE="MariaDB"
@@ -529,9 +518,9 @@ install_messaging_queue() {
     esac
 }
 
-############################################
+########################################
 # Install Web Server & Virtual Host Setup  #
-############################################
+########################################
 
 install_web_server() {
     case $WEB_SERVER in
@@ -906,6 +895,10 @@ install_lamp() {
     install_prerequisites
     install_php
     install_database
+    # Install phpMyAdmin if selected by the user.
+    if [[ "${INSTALL_PHPMYADMIN:-false}" = true ]]; then
+        install_phpmyadmin
+    fi
     install_ftp_sftp
     install_cache
     install_messaging_queue
@@ -943,7 +936,6 @@ case $MODE in
             systemctl stop "$service" 2>/dev/null || true
         done
 
-        # Define a list of packages to remove.
         PACKAGES_TO_REMOVE=(
             "apache2"
             "apache2-utils"
@@ -954,7 +946,7 @@ case $MODE in
             "mariadb-server"
             "percona-server-server"
             "postgresql"
-            "php*"  # Note: This wildcard may need adjustment based on your environment.
+            "php*" 
             "certbot"
             "$FIREWALL"
             "vsftpd"
@@ -964,14 +956,13 @@ case $MODE in
             "memcached"
             "varnish"
             "rabbitmq-server"
+            "phpmyadmin"
         )
 
-        # Loop through each package and remove it if installed.
         for pkg in "${PACKAGES_TO_REMOVE[@]}"; do
             remove_if_installed "$pkg"
         done
 
-        # Autoremove and autoclean packages.
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
             apt-get autoremove -y && apt-get autoclean
         elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
@@ -982,10 +973,8 @@ case $MODE in
             fi
         fi
 
-        # Remove configuration directories and files.
         rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
 
-        # Disable firewall if applicable.
         if [[ "$FIREWALL" == "ufw" ]]; then
             ufw disable || true
         else
