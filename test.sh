@@ -105,13 +105,12 @@ ART=(
     "███▌    ▄   ███    ███ ███   ███   ███   ███               ███    ███ ███   ███      ███ ▄█▄ ███ ███    ███ ███▌    ▄   ███        ███  ███    ███ "
     "█████▄▄██   ███    █▀   ▀█   ███   █▀   ▄████▀           ▄█████████▀   ▀█████▀        ▀███▀███▀  ████████▀  █████▄▄██   ███        █▀   ████████▀  "
     "▀                                                                                                           ▀                                      "
-    "#############################################################Lamp by Wulfic########################################################################"
+    "############################################Lamp by Wulfic###############################################"
 )
 
 for line in "${ART[@]}"; do
     printf "${RED}%s\n" "$line"
 done
-printf "${NC}"  # Reset the color at the end
 
 echo "##########################################################################"
 echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
@@ -138,6 +137,9 @@ echo "#       • Varnish caching is only allowed with Nginx."
 echo "#   - After installation a log file (\"installer.log\") is created on your Desktop,"
 echo "#     or in your home directory if Desktop does not exist."
 echo "##########################################################################"
+
+printf "${NC}"  # Reset the color at the end
+
 
 # -------------------------------------------------------------------------------
 # Prompt for operation at the beginning.
