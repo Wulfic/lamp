@@ -2,10 +2,16 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Global error trap: Prints a helpful message on error.
+# Global error trap
 trap 'echo "ERROR: An unexpected error occurred at line $LINENO: \"$BASH_COMMAND\"" >&2' ERR
+trap 'echo -e "\n🔴 Script interrupted. Cleaning up..."; cleanup; exit 130' SIGINT SIGTERM
 
-# Cleanup function to remove temporary files created during execution.
+DEBUG=false  # Set to true to enable debug mode
+if [[ "$DEBUG" == true ]]; then
+  set -x
+fi
+
+# Cleanup function
 cleanup() {
     if [[ -f /tmp/kafka.tgz ]]; then
         rm -f /tmp/kafka.tgz
@@ -14,13 +20,72 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Centralized error logging function.
+# Logging function
 log_error() {
     local msg="$1"
     echo "ERROR: $msg" >&2
     if [[ -n "${LOGFILE:-}" ]]; then
         echo "$(date +'%Y-%m-%d %T') ERROR: $msg" >> "$LOGFILE"
     fi
+}
+
+# Retry logic for transient errors
+retry_command() {
+  local retries=3 delay=5 attempt=0
+  until "$@" || [[ $attempt -ge $retries ]]; do
+    ((attempt++))
+    echo "⚠️  Attempt $attempt failed: $*. Retrying in $delay seconds..."
+    sleep "$delay"
+  done
+  if [[ $attempt -ge $retries ]]; then
+    log_error "Command failed after $retries attempts: $*"
+    return 1
+  fi
+}
+
+# Enhanced pkg_install with retry and repo support
+pkg_install() {
+  local pkgs=("$@")
+  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+    if ! retry_command apt-get install -y "${pkgs[@]}"; then
+      echo "⚠️  Attempting to add missing repositories..."
+      apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
+
+      # Add common 3rd-party PPAs conditionally
+      for pkg in "${pkgs[@]}"; do
+        case $pkg in
+          php8.2*|php8.1*|php8.0*)
+            add-apt-repository ppa:ondrej/php -y
+            ;;
+          nginx)
+            add-apt-repository ppa:nginx/stable -y
+            ;;
+          *)
+            :
+            ;;
+        esac
+      done
+
+      apt-get update
+      retry_command apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+    fi
+  else
+    if command -v dnf >/dev/null 2>&1; then
+      if ! retry_command dnf install -y "${pkgs[@]}"; then
+        echo "⚠️  Trying to enable required repositories..."
+        dnf install -y epel-release || true
+        dnf config-manager --set-enabled powertools epel || true
+        retry_command dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+    else
+      if ! retry_command yum install -y "${pkgs[@]}"; then
+        echo "⚠️  Trying to enable required repositories..."
+        yum install -y epel-release || true
+        yum-config-manager --enable epel || true
+        retry_command yum install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+    fi
+  fi
 }
 
 echo "##########################################################################"
