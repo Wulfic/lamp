@@ -43,9 +43,50 @@ retry_command() {
   fi
 }
 
-# --- Enhanced pkg_install with repository support ---
-# (Note: later this function is overridden for DEBs; here we rework it in the package management helper section)
-# -------------------------------------------------------------------------------
+# Enhanced pkg_install with retry and repo support (first definition)
+pkg_install() {
+  local pkgs=("$@")
+  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+    if ! retry_command apt-get install -y "${pkgs[@]}"; then
+      echo "⚠️  Attempting to add missing repositories..."
+      apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
+
+      # Add common 3rd-party PPAs conditionally
+      for pkg in "${pkgs[@]}"; do
+        case $pkg in
+          php8.2*|php8.1*|php8.0*)
+            add-apt-repository ppa:ondrej/php -y
+            ;;
+          nginx)
+            add-apt-repository ppa:nginx/stable -y
+            ;;
+          *)
+            :
+            ;;
+        esac
+      done
+
+      apt-get update
+      retry_command apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+    fi
+  else
+    if command -v dnf >/dev/null 2>&1; then
+      if ! retry_command dnf install -y "${pkgs[@]}"; then
+        echo "⚠️  Trying to enable required repositories..."
+        dnf install -y epel-release || true
+        dnf config-manager --set-enabled powertools epel || true
+        retry_command dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+    else
+      if ! retry_command yum install -y "${pkgs[@]}"; then
+        echo "⚠️  Trying to enable required repositories..."
+        yum install -y epel-release || true
+        yum-config-manager --enable epel || true
+        retry_command yum install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+    fi
+  fi
+}
 
 echo "##########################################################################"
 echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
@@ -114,7 +155,6 @@ esac
 ##########################################
 # Package Management Helper Functions    #
 ##########################################
-
 pkg_update() {
     echo "Updating system..."
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
@@ -132,23 +172,9 @@ pkg_update() {
     fi
 }
 
-# Modified pkg_install with repository additions for PHP and updated Nginx.
+# Second definition of pkg_install (simpler version) used by some helper functions.
 pkg_install() {
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        # Add repositories for PHP and updated Nginx if needed.
-        for pkg in "$@"; do
-            case $pkg in
-                php8.2*|php8.1*|php8.0*)
-                    add-apt-repository -y ppa:ondrej/php
-                    ;;
-                nginx)
-                    add-apt-repository -y ppa:nginx/stable
-                    ;;
-                *)
-                    ;;
-            esac
-        done
-        apt-get update
         apt-get install -y "$@"
     else
         if command -v dnf >/dev/null 2>&1; then
@@ -173,6 +199,7 @@ pkg_remove() {
 
 # -------------------------------------------------------------------------------
 # New Helper Function: remove_if_installed
+# Checks if a package is installed before attempting to remove it.
 # -------------------------------------------------------------------------------
 remove_if_installed() {
     local pkg="$1"
@@ -196,7 +223,6 @@ remove_if_installed() {
 ###################################
 # Pre‑Installation Functions      #
 ###################################
-
 update_system() {
     pkg_update
 }
@@ -219,7 +245,6 @@ install_prerequisites() {
 ################################
 # Compatibility Check Function #
 ################################
-
 check_compatibility() {
     echo "Performing compatibility checks..."
     if [[ "$DB_ENGINE" == "OracleXE" ]]; then
@@ -236,7 +261,6 @@ check_compatibility() {
 ################################
 # Best PHP Version Selection   #
 ################################
-
 best_php_version() {
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
         if apt-cache show php8.2 >/dev/null 2>&1; then
@@ -256,63 +280,88 @@ best_php_version() {
 ################################
 # User Input Prompts           #
 ################################
-
 if [[ "$MODE" != "uninstall" ]]; then
-    read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
-    echo
-    read -p "Enter domain name(s) (comma-separated): " DOMAINS
-    IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
-    read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
-    DOC_ROOT=${DOC_ROOT:-/var/www/html}
-    
-    PHP_VERSION=$(best_php_version)
-    echo "Auto-selected best PHP version: $PHP_VERSION"
-    
-    echo "Select database engine:"
-    select DB_ENGINE in "MySQL" "MariaDB" "PostgreSQL" "SQLite" "Percona" "MongoDB" "OracleXE"; do break; done
-    echo "Install optional tools (git, curl, htop, zip, etc.)?"
-    select UTIL_TOOLS in "Yes" "No"; do
-        [[ "$UTIL_TOOLS" == "Yes" ]] && INSTALL_UTILS=true || INSTALL_UTILS=false; break
-    done
-    echo "Install FTP/SFTP server?"
-    select FTP_SETUP in "Yes" "No"; do
-        [[ "$FTP_SETUP" == "Yes" ]] && INSTALL_FTP=true || INSTALL_FTP=false; break
-    done
-    echo "Enable caching (Redis/Memcached/Varnish)?"
-    select CACHE_SETUP in "Redis" "Memcached" "Varnish" "None"; do break; done
-    echo "Select messaging queue engine:"
-    select MSG_QUEUE in "RabbitMQ" "Kafka" "None"; do break; done
-    echo "Select web server:"
-    select WEB_SERVER in "Nginx" "Apache" "Caddy" "Lighttpd"; do break; done
-    echo "Setup SSH deployment user?"
-    select SSH_DEPLOY in "Yes" "No"; do
-        [[ "$SSH_DEPLOY" == "Yes" ]] && SETUP_SSH_DEPLOY=true || SETUP_SSH_DEPLOY=false; break
-    done
-    echo "Restrict SSH logins to specific users? (Optional)"
-    read -p "Enter allowed SSH usernames (space‑separated, leave empty to allow all): " SSH_ALLOWED_USERS
-    echo "Select SSH configuration type:"
-    select SSH_CONFIG_OPTION in "Standard SSH" "Hardened SSH"; do
-        case $SSH_CONFIG_OPTION in
-            "Standard SSH" ) USE_HARDENED_SSH=false; break;;
-            "Hardened SSH" ) USE_HARDENED_SSH=true; break;;
+    echo "Select installation type:"
+    select INSTALL_TYPE in "Standard LAMP" "Advanced Installation"; do
+        case $INSTALL_TYPE in
+            "Standard LAMP") INSTALL_TYPE="standard"; break;;
+            "Advanced Installation") INSTALL_TYPE="advanced"; break;;
         esac
     done
-    echo "Generate Docker Compose file for containerized deployment?"
-    select DOCKER_OPTION in "Yes" "No"; do
-        [[ "$DOCKER_OPTION" == "Yes" ]] && GENERATE_DOCKER=true || GENERATE_DOCKER=false; break
-    done
-    echo "Generate Ansible playbook for automation?"
-    select ANSIBLE_OPTION in "Yes" "No"; do
-        [[ "$ANSIBLE_OPTION" == "Yes" ]] && GENERATE_ANSIBLE=true || GENERATE_ANSIBLE=false; break
-    done
 
-    # --- New Prompt: Install phpMyAdmin ---
-    echo "Install phpMyAdmin?"
-    select PHPMYADMIN_OPTION in "Yes" "No"; do
-        [[ "$PHPMYADMIN_OPTION" == "Yes" ]] && INSTALL_PHPMYADMIN=true || INSTALL_PHPMYADMIN=false; break
-    done
-
-    check_compatibility
+    if [[ "$INSTALL_TYPE" == "standard" ]]; then
+         read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
+         echo
+         read -p "Enter domain name(s) (comma-separated): " DOMAINS
+         IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
+         read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
+         DOC_ROOT=${DOC_ROOT:-/var/www/html}
+         # Set defaults for standard installation:
+         DB_ENGINE="MariaDB"
+         WEB_SERVER="Apache"
+         PHP_VERSION=$(best_php_version)
+         INSTALL_UTILS=false
+         INSTALL_FTP=false
+         CACHE_SETUP="None"
+         MSG_QUEUE="None"
+         SSH_DEPLOY=false
+         USE_HARDENED_SSH=false
+         GENERATE_DOCKER=false
+         GENERATE_ANSIBLE=false
+         echo "Standard LAMP installation selected: Apache, MariaDB, PHP, and phpMyAdmin."
+    else
+         # Advanced installation prompts.
+         read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
+         echo
+         read -p "Enter domain name(s) (comma-separated): " DOMAINS
+         IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
+         read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
+         DOC_ROOT=${DOC_ROOT:-/var/www/html}
+         
+         # Auto-select the best PHP version.
+         PHP_VERSION=$(best_php_version)
+         echo "Auto-selected best PHP version: $PHP_VERSION"
+         
+         echo "Select database engine:"
+         select DB_ENGINE in "MySQL" "MariaDB" "PostgreSQL" "SQLite" "Percona" "MongoDB" "OracleXE"; do break; done
+         echo "Install optional tools (git, curl, htop, zip, etc.)?"
+         select UTIL_TOOLS in "Yes" "No"; do
+             [[ "$UTIL_TOOLS" == "Yes" ]] && INSTALL_UTILS=true || INSTALL_UTILS=false; break
+         done
+         echo "Install FTP/SFTP server?"
+         select FTP_SETUP in "Yes" "No"; do
+             [[ "$FTP_SETUP" == "Yes" ]] && INSTALL_FTP=true || INSTALL_FTP=false; break
+         done
+         echo "Enable caching (Redis/Memcached/Varnish)?"
+         select CACHE_SETUP in "Redis" "Memcached" "Varnish" "None"; do break; done
+         echo "Select messaging queue engine:"
+         select MSG_QUEUE in "RabbitMQ" "Kafka" "None"; do break; done
+         echo "Select web server:"
+         select WEB_SERVER in "Nginx" "Apache" "Caddy" "Lighttpd"; do break; done
+         echo "Setup SSH deployment user?"
+         select SSH_DEPLOY in "Yes" "No"; do
+             [[ "$SSH_DEPLOY" == "Yes" ]] && SETUP_SSH_DEPLOY=true || SETUP_SSH_DEPLOY=false; break
+         done
+         echo "Restrict SSH logins to specific users? (Optional)"
+         read -p "Enter allowed SSH usernames (space‑separated, leave empty to allow all): " SSH_ALLOWED_USERS
+         echo "Select SSH configuration type:"
+         select SSH_CONFIG_OPTION in "Standard SSH" "Hardened SSH"; do
+             case $SSH_CONFIG_OPTION in
+                 "Standard SSH" ) USE_HARDENED_SSH=false; break;;
+                 "Hardened SSH" ) USE_HARDENED_SSH=true; break;;
+             esac
+         done
+         echo "Generate Docker Compose file for containerized deployment?"
+         select DOCKER_OPTION in "Yes" "No"; do
+             [[ "$DOCKER_OPTION" == "Yes" ]] && GENERATE_DOCKER=true || GENERATE_DOCKER=false; break
+         done
+         echo "Generate Ansible playbook for automation?"
+         select ANSIBLE_OPTION in "Yes" "No"; do
+             [[ "$ANSIBLE_OPTION" == "Yes" ]] && GENERATE_ANSIBLE=true || GENERATE_ANSIBLE=false; break
+         done
+         
+         check_compatibility
+    fi
 
     if [[ -d "$HOME/Desktop" ]]; then
          LOGFILE="$HOME/Desktop/installer.log"
@@ -324,26 +373,8 @@ if [[ "$MODE" != "uninstall" ]]; then
 fi
 
 ###################################
-# New Function: Install phpMyAdmin
-###################################
-install_phpmyadmin() {
-    echo "Installing phpMyAdmin..."
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        # Preconfigure apt to avoid interactive prompts.
-        echo "phpmyadmin phpmyadmin/dbconfig-install boolean true" | debconf-set-selections
-        echo "phpmyadmin phpmyadmin/app-password-confirm password $DB_PASSWORD" | debconf-set-selections
-        echo "phpmyadmin phpmyadmin/mysql/app-pass password $DB_PASSWORD" | debconf-set-selections
-        echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect" | debconf-set-selections
-        pkg_install phpmyadmin
-    else
-        echo "phpMyAdmin installation is not automated for this distribution."
-    fi
-}
-
-###################################
 # Helper and Modular Functions    #
 ###################################
-
 setup_firewall() {
     echo "Configuring firewall..."
     if [[ "$FIREWALL" == "ufw" ]]; then
@@ -373,7 +404,6 @@ setup_firewall() {
 ######################################
 # Installation Functions for Engines #
 ######################################
-
 install_php() {
     echo "Installing PHP ${PHP_VERSION} and necessary modules..."
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
@@ -392,6 +422,7 @@ install_php() {
             pkg_install "libapache2-mod-php${PHP_VERSION}"
         fi
     else
+        # For CentOS/RHEL-based systems, use the Remi repository.
         if ! rpm -q remi-release >/dev/null 2>&1; then
             pkg_install "https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
         fi
@@ -415,6 +446,7 @@ install_php() {
 
 install_database() {
     echo "Installing database engine: $DB_ENGINE"
+    # For RedHat–based distros, switch MySQL to MariaDB if needed.
     if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
         echo "MySQL is not available by default on $PRETTY_NAME; switching to MariaDB."
         DB_ENGINE="MariaDB"
@@ -518,10 +550,9 @@ install_messaging_queue() {
     esac
 }
 
-########################################
+############################################
 # Install Web Server & Virtual Host Setup  #
-########################################
-
+############################################
 install_web_server() {
     case $WEB_SERVER in
         "Nginx")
@@ -633,7 +664,6 @@ EOF
 #############################
 # Performance Optimizations #
 #############################
-
 optimize_performance() {
     echo "Optimizing system performance..."
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
@@ -685,7 +715,6 @@ EOF
 ########################################
 # Security Hardening & SSH Configuration
 ########################################
-
 security_harden() {
     echo "Starting security hardening procedures..."
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
@@ -797,7 +826,6 @@ setup_ssh_deployment() {
 ##########################################
 # Containerization & Automation Support  #
 ##########################################
-
 generate_docker_compose() {
     echo "Generating Docker Compose file..."
     cat <<EOF > docker-compose.yml
@@ -888,17 +916,46 @@ EOF
 }
 
 ###################################
+# New Function: Install phpMyAdmin #
+###################################
+install_phpmyadmin() {
+    echo "Installing phpMyAdmin..."
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+         pkg_install phpmyadmin
+         if [ -d "/usr/share/phpmyadmin" ] && [ ! -L "$DOC_ROOT/phpmyadmin" ]; then
+             ln -s /usr/share/phpmyadmin "$DOC_ROOT/phpmyadmin"
+         fi
+    else
+         echo "phpMyAdmin installation on this distribution requires manual configuration."
+    fi
+}
+
+###################################
+# New Function: Standard Installation #
+###################################
+install_standard() {
+    echo "Starting Standard LAMP installation (Apache, MariaDB, PHP, phpMyAdmin)..."
+    install_prerequisites
+    install_php
+    install_database
+    install_web_server
+    setup_virtual_hosts
+    install_phpmyadmin
+    optimize_performance
+    setup_firewall
+    security_harden
+    setup_ssh_deployment
+    echo "✅ Standard LAMP installation is complete!"
+    echo "Detailed log file saved at: $LOGFILE"
+}
+
+###################################
 # Main Installation Routine       #
 ###################################
-
 install_lamp() {
     install_prerequisites
     install_php
     install_database
-    # Install phpMyAdmin if selected by the user.
-    if [[ "${INSTALL_PHPMYADMIN:-false}" = true ]]; then
-        install_phpmyadmin
-    fi
     install_ftp_sftp
     install_cache
     install_messaging_queue
@@ -919,15 +976,22 @@ install_lamp() {
 ###################################
 # Execution Based on Mode         #
 ###################################
-
 case $MODE in
     install)
-        install_lamp
+        if [[ "$INSTALL_TYPE" == "standard" ]]; then
+            install_standard
+        else
+            install_lamp
+        fi
         ;;
     upgrade)
         echo "Upgrading system and reconfiguring services..."
         update_system
-        install_lamp
+        if [[ "$INSTALL_TYPE" == "standard" ]]; then
+            install_standard
+        else
+            install_lamp
+        fi
         ;;
     uninstall)
         echo "Uninstalling installed components..."
@@ -936,6 +1000,7 @@ case $MODE in
             systemctl stop "$service" 2>/dev/null || true
         done
 
+        # Define a list of packages to remove.
         PACKAGES_TO_REMOVE=(
             "apache2"
             "apache2-utils"
@@ -946,7 +1011,7 @@ case $MODE in
             "mariadb-server"
             "percona-server-server"
             "postgresql"
-            "php*" 
+            "php*"  # Note: This wildcard may need adjustment based on your environment.
             "certbot"
             "$FIREWALL"
             "vsftpd"
@@ -956,13 +1021,14 @@ case $MODE in
             "memcached"
             "varnish"
             "rabbitmq-server"
-            "phpmyadmin"
         )
 
+        # Loop through each package and remove it if installed.
         for pkg in "${PACKAGES_TO_REMOVE[@]}"; do
             remove_if_installed "$pkg"
         done
 
+        # Autoremove and autoclean packages.
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
             apt-get autoremove -y && apt-get autoclean
         elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
@@ -973,8 +1039,10 @@ case $MODE in
             fi
         fi
 
+        # Remove configuration directories and files.
         rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
 
+        # Disable firewall if applicable.
         if [[ "$FIREWALL" == "ufw" ]]; then
             ufw disable || true
         else
