@@ -1050,7 +1050,11 @@ case $MODE in
 
         # Disable firewall if applicable.
         if [[ "$FIREWALL" == "ufw" ]]; then
-            ufw disable || true
+            if command -v ufw >/dev/null 2>&1; then
+                ufw disable || true
+            else
+                echo "⚠️  UFW not found; skipping firewall disable for ufw."
+            fi
         else
             systemctl stop firewalld || true
             systemctl disable firewalld || true
@@ -1060,7 +1064,11 @@ case $MODE in
 esac
 
 echo "✅ Installation, configuration, and additional engine deployments are complete!"
-echo "Detailed log file saved at: $LOGFILE"
+
+# Only print log file location if in install/upgrade mode.
+if [[ "$MODE" != "uninstall" && -v LOGFILE ]]; then
+    echo "Detailed log file saved at: $LOGFILE"
+fi
 
 # ANSI color array for rainbow
 COLORS=(
