@@ -7,7 +7,7 @@ sudo ./lamp.sh
 Features!
 
 1. Multi-Distro Compatibility & Detection
-Automatic Distribution Detection: The script reads from /etc/os-release to determine which Linux distribution is running. It supports major distros including Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, and RHEL.
+Automatic Distribution Detection: The script reads from /etc/os-release to determine which Linux distribution is running. It supports major distros including Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, Fedora, Mint, and RHEL.
 
 Distro-Specific Package Manager Configuration: Based on the detected distro, the script sets variables for installing and updating packages. For example, it uses apt (or apt-fast if available) on Debian/Ubuntu systems and dnf or yum on Red Hat–based systems.
 
