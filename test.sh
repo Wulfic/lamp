@@ -47,16 +47,20 @@ detect_distro() {
     fi
 }
 
-# Enable common repos for RHEL-based systems (e.g. EPEL and powertools/CRB)
 enable_epel_and_powertools() {
     if command -v dnf >/dev/null 2>&1; then
         dnf install -y epel-release || true
-        dnf config-manager --set-enabled powertools epel || true
+        if grep -q "Rocky Linux 9" /etc/os-release; then
+            dnf config-manager --set-enabled crb || true
+        else
+            dnf config-manager --set-enabled powertools || true
+        fi
     else
         yum install -y epel-release || true
         yum-config-manager --enable epel || true
     fi
 }
+
 
 # Common install wrapper for retry logic
 install_with_retry() {
