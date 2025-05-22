@@ -51,13 +51,7 @@ detect_distro() {
 enable_epel_and_powertools() {
     if command -v dnf >/dev/null 2>&1; then
         dnf install -y epel-release || true
-        if grep -q "Rocky Linux 9" /etc/os-release; then
-            echo "Enabling CodeReady Builder (CRB) repository for Rocky Linux 9..."
-            dnf config-manager --set-enabled crb || true
-        else
-            echo "Enabling PowerTools repository..."
-            dnf config-manager --set-enabled powertools || true
-        fi
+        dnf config-manager --set-enabled powertools epel || true
     else
         yum install -y epel-release || true
         yum-config-manager --enable epel || true
@@ -247,20 +241,6 @@ best_php_version() {
         echo "8.2"
     fi
 }
-
-##########################################
-# Secure MySQL/MariaDB Installation      #
-##########################################
-secure_mysql_install() {
-    local password="$1"
-    if command -v expect >/dev/null 2>&1; then
-        expect <<EOF
-spawn mysql_secure_installation
-expect "Enter current password for root (enter for none):"
-send "\r"
-expect "Set root password?"
-send "Y\r"
-
 
 ##########################################
 # Package & System Update Functions      #
