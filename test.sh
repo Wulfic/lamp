@@ -230,12 +230,33 @@ case $DISTRO in
 esac
 
 ##########################################
-# Best PHP Version Selection             #
+# Enable Additional Repositories         #
+##########################################
+enable_epel_and_powertools() {
+    if command -v dnf >/dev/null 2>&1; then
+        # Install EPEL release if not already installed
+        dnf install -y epel-release || true
+        # For Rocky Linux, use CRB for version 9 or powertools for version 8
+        if grep -q "Rocky Linux 9" /etc/os-release; then
+            echo "Enabling CodeReady Builder (CRB) repository for Rocky Linux 9..."
+            dnf config-manager --set-enabled crb || true
+        else
+            echo "Enabling PowerTools repository..."
+            dnf config-manager --set-enabled powertools || true
+        fi
+    else
+        yum install -y epel-release || true
+        yum-config-manager --enable epel || true
+    fi
+}
+
+##########################################
+# Determine the Best PHP Version         #
 ##########################################
 best_php_version() {
     case "$DISTRO" in
         ubuntu|debian)
-            # Iterate candidate versions on Debian‑based systems
+            # Loop through candidate versions; if not available, fall back to 7.4
             for ver in 8.2 8.1 8.0; do
                 if apt-cache show php${ver} >/dev/null 2>&1; then
                     echo "$ver"
@@ -245,20 +266,17 @@ best_php_version() {
             echo "7.4"
             ;;
         fedora)
-            # Fedora usually provides up‑to‑date packages via dnf info.
-            # Try candidate versions in order.
+            # Use dnf info to select a candidate version
             for ver in 8.2 8.1 8.0; do
                 if dnf info php | grep -E -q "Version\s*:\s*${ver}\b"; then
                     echo "$ver"
                     return
                 fi
             done
-            # Fallback default for Fedora if no match is found.
             echo "8.2"
             ;;
         centos|rocky|almalinux|rhel)
-            # For RPM‑based systems (except Fedora), check if Remi module is available.
-            # This assumes your script will later install or enable the Remi repo if needed.
+            # Check available Remi module streams for newer PHP versions.
             for ver in 8.2 8.1 8.0; do
                 if dnf module info php:remi-${ver} &>/dev/null; then
                     echo "$ver"
@@ -272,6 +290,50 @@ best_php_version() {
             ;;
     esac
 }
+
+##########################################
+# PHP Installation Function              #
+##########################################
+install_php() {
+    local version_lc="${PHP_VERSION,,}"
+    echo "Installing PHP ${version_lc} and necessary modules..."
+    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        pkg_install "php${version_lc}" "php${version_lc}-cli" "php${version_lc}-mysql" \
+                    "php${version_lc}-gd" "php${version_lc}-curl" "php${version_lc}-mbstring" \
+                    "php${version_lc}-xml" "php${version_lc}-zip"
+        if [[ "$DB_ENGINE" == "SQLite" ]]; then
+            pkg_install ${PHP_MODULES[sqlite]}
+        fi
+    else
+        # For RPM‐based systems, determine the correct Remi repository package.
+        if [[ "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" || "$DISTRO" == "rhel" ]]; then
+            local rel
+            rel=$(rpm -E %{rhel})
+            REMI_RPM="https://rpms.remirepo.net/enterprise/remi-release-${rel}.rpm"
+        elif [[ "$DISTRO" == "fedora" ]]; then
+            local rel
+            rel=$(rpm -E %{fedora})
+            REMI_RPM="https://rpms.remirepo.net/fedora/remi-release-${rel}.rpm"
+        else
+            REMI_RPM="https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
+        fi
+        # Install Remi when missing
+        if ! rpm -q remi-release >/dev/null 2>&1; then
+            pkg_install "$REMI_RPM"
+        fi
+        # Enable extra repositories
+        enable_epel_and_powertools
+        # Reset PHP modules and enable the chosen Remi stream
+        dnf module reset php -y
+        dnf module enable php:remi-"${version_lc}" -y
+        # Install the PHP core packages
+        pkg_install ${PHP_MODULES[core]}
+        if [[ "$DB_ENGINE" == "SQLite" ]]; then
+            pkg_install ${PHP_MODULES[sqlite]}
+        fi
+    fi
+}
+
 
 ##########################################
 # Package & System Update Functions      #
