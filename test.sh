@@ -233,17 +233,44 @@ esac
 # Best PHP Version Selection             #
 ##########################################
 best_php_version() {
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        for ver in 8.2 8.1 8.0; do
-            if apt-cache show php${ver} >/dev/null 2>&1; then
-                echo "$ver"
-                return
-            fi
-        done
-        echo "7.4"
-    else
-        echo "8.2"
-    fi
+    case "$DISTRO" in
+        ubuntu|debian)
+            # Iterate candidate versions on Debian‑based systems
+            for ver in 8.2 8.1 8.0; do
+                if apt-cache show php${ver} >/dev/null 2>&1; then
+                    echo "$ver"
+                    return
+                fi
+            done
+            echo "7.4"
+            ;;
+        fedora)
+            # Fedora usually provides up‑to‑date packages via dnf info.
+            # Try candidate versions in order.
+            for ver in 8.2 8.1 8.0; do
+                if dnf info php | grep -E -q "Version\s*:\s*${ver}\b"; then
+                    echo "$ver"
+                    return
+                fi
+            done
+            # Fallback default for Fedora if no match is found.
+            echo "8.2"
+            ;;
+        centos|rocky|almalinux|rhel)
+            # For RPM‑based systems (except Fedora), check if Remi module is available.
+            # This assumes your script will later install or enable the Remi repo if needed.
+            for ver in 8.2 8.1 8.0; do
+                if dnf module info php:remi-${ver} &>/dev/null; then
+                    echo "$ver"
+                    return
+                fi
+            done
+            echo "7.4"
+            ;;
+        *)
+            echo "8.2"
+            ;;
+    esac
 }
 
 ##########################################
