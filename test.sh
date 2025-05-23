@@ -12,8 +12,6 @@ if [[ "$DEBUG" == true ]]; then
   set -x
 fi
 
-
-
 # If DISTRO isn’t already set from the environment, attempt to detect it automatically.
 if [ -z "${DISTRO-}" ]; then
     if [ -f /etc/os-release ]; then
@@ -191,17 +189,17 @@ detect_distro() {
 # Function to (re)enable EPEL and related repos (modularized for ease of editing)
 enable_epel_and_powertools() {
     if command -v dnf >/dev/null 2>&1; then
-        dnf install -y epel-release || true
+        sudo dnf install -y epel-release || true
         if grep -q "Rocky Linux 9" /etc/os-release; then
             log_info "Enabling CodeReady Builder (CRB) repository for Rocky Linux 9..."
-            dnf config-manager --set-enabled crb || true
+            sudo dnf config-manager --set-enabled crb || true
         else
             log_info "Enabling PowerTools repository..."
-            dnf config-manager --set-enabled powertools || true
+            sudo dnf config-manager --set-enabled powertools || true
         fi
     else
-        yum install -y epel-release || true
-        yum-config-manager --enable epel || true
+        sudo yum install -y epel-release || true
+        sudo yum-config-manager --enable epel || true
     fi
 }
 
@@ -231,51 +229,51 @@ pkg_install() {
   log_info "Installing packages: ${pkgs[*]} on distro: $DISTRO"
   case "$DISTRO" in
     ubuntu|debian)
-      if ! install_with_retry apt-get install -y "${pkgs[@]}"; then
+      if ! install_with_retry sudo apt-get install -y "${pkgs[@]}"; then
         echo "⚠️  Installation failed on ${DISTRO}. Attempting to add missing repositories..."
-        apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
+        sudo apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
         for pkg in "${pkgs[@]}"; do
           case $pkg in
             php8.*)
-              add-apt-repository ppa:ondrej/php -y
+              sudo add-apt-repository ppa:ondrej/php -y
               ;;
             nginx)
-              add-apt-repository ppa:nginx/stable -y
+              sudo add-apt-repository ppa:nginx/stable -y
               ;;
           esac
         done
-        apt-get update
-        install_with_retry apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+        sudo apt-get update
+        install_with_retry sudo apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
       fi
       ;;
     centos|rhel|rocky|almalinux)
-      if ! install_with_retry dnf install -y "${pkgs[@]}"; then
+      if ! install_with_retry sudo dnf install -y "${pkgs[@]}"; then
         echo "⚠️  Installation failed on ${DISTRO}. Attempting to enable required repositories..."
-        dnf install -y epel-release || log_error "❌ Could not install epel-release"
+        sudo dnf install -y epel-release || log_error "❌ Could not install epel-release"
         if [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" ]]; then
-          dnf config-manager --set-enabled powertools || log_error "❌ Could not enable powertools repository"
+          sudo dnf config-manager --set-enabled powertools || log_error "❌ Could not enable powertools repository"
         fi
         if [[ "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" || "$DISTRO" == "rhel" ]]; then
-          dnf config-manager --set-enabled crb || log_error "❌ Could not enable CRB repository"
+          sudo dnf config-manager --set-enabled crb || log_error "❌ Could not enable CRB repository"
         fi
-        install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+        install_with_retry sudo dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
       fi
       ;;
     fedora)
-      if ! install_with_retry dnf install -y "${pkgs[@]}"; then
+      if ! install_with_retry sudo dnf install -y "${pkgs[@]}"; then
         echo "⚠️  Installation failed on Fedora. Refreshing metadata and retrying..."
-        dnf makecache || log_error "❌ Could not update package cache on Fedora"
-        install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+        sudo dnf makecache || log_error "❌ Could not update package cache on Fedora"
+        install_with_retry sudo dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
       fi
       ;;
     *)
       log_error "Warning: Unsupported distribution: ${DISTRO}. Attempting to use available package manager for installation."
       if command -v apt-get >/dev/null 2>&1; then
-          install_with_retry apt-get install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with apt-get on ${DISTRO}"
+          install_with_retry sudo apt-get install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with apt-get on ${DISTRO}"
       elif command -v dnf >/dev/null 2>&1; then
-          install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with dnf on ${DISTRO}"
+          install_with_retry sudo dnf install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with dnf on ${DISTRO}"
       elif command -v yum >/dev/null 2>&1; then
-          install_with_retry yum install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with yum on ${DISTRO}"
+          install_with_retry sudo yum install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with yum on ${DISTRO}"
       else
           log_error "❌ No known package manager found on ${DISTRO}."
       fi
@@ -290,27 +288,27 @@ pkg_update() {
     log_info "Updating system on $DISTRO..."
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
         if command -v apt-fast >/dev/null 2>&1; then
-            apt-fast update && apt-fast upgrade -y || { log_error "apt-fast update failed."; exit 2; }
+            sudo apt-fast update && sudo apt-fast upgrade -y || { log_error "apt-fast update failed."; exit 2; }
         else
-            apt-get update && apt-get upgrade -y || { log_error "apt-get update/upgrade failed."; exit 2; }
+            sudo apt-get update && sudo apt-get upgrade -y || { log_error "apt-get update/upgrade failed."; exit 2; }
         fi
     else
         if command -v dnf >/dev/null 2>&1; then
-            dnf update -y || { log_error "dnf update failed."; exit 2; }
+            sudo dnf update -y || { log_error "dnf update failed."; exit 2; }
         else
-            yum update -y || { log_error "yum update failed."; exit 2; }
+            sudo yum update -y || { log_error "yum update failed."; exit 2; }
         fi
     fi
 }
 
 pkg_remove() {
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        apt-get purge -y "$@"
+        sudo apt-get purge -y "$@"
     else
         if command -v dnf >/dev/null 2>&1; then
-            dnf remove -y "$@"
+            sudo dnf remove -y "$@"
         else
-            yum remove -y "$@"
+            sudo yum remove -y "$@"
         fi
     fi
 }
@@ -501,17 +499,17 @@ install_php() {
             pkg_install "$REMI_RPM"
         fi
 
-        dnf module reset php -y
-        if ! dnf module enable php:remi-"${version_lc}" -y; then
+        sudo dnf module reset php -y
+        if ! sudo dnf module enable php:remi-"${version_lc}" -y; then
             log_error "Failed to enable php:remi-${version_lc} module stream"
             exit 3
         fi
-        if ! dnf module install php:remi-"${version_lc}" -y; then
+        if ! sudo dnf module install php:remi-"${version_lc}" -y; then
             log_error "Failed to install php:remi-${version_lc} module group"
             exit 3
         fi
 
-        dnf clean all && dnf makecache
+        sudo dnf clean all && sudo dnf makecache
         pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysqlnd" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
         if [[ "$DB_ENGINE" == "SQLite" ]]; then
             pkg_install "${PHP_MODULES[sqlite]}"
@@ -695,45 +693,54 @@ install_database() {
     
     case $DB_ENGINE in
         "MariaDB")
-			pkg_install mariadb-server
-			systemctl enable --now mariadb
+            pkg_install mariadb-server
+            sudo systemctl enable --now mariadb
 
-			echo "Applying secure MariaDB configuration..."
-			AUTH_PLUGIN=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
-			if [[ "$AUTH_PLUGIN" == "unix_socket" ]]; then
-				echo "Unix socket authentication detected; updating root password using socket auth."
-				sudo mysql <<EOF
+            echo "Applying secure MariaDB configuration..."
+            # --- FIX APPLIED: For Rocky Linux, AlmaLinux, and RHEL, force the socket authentication branch.
+            if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
+                echo "Detected $DISTRO: Forcing unix_socket authentication update without using a current password."
+                sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
-			else
-				echo "Authentication plugin is not unix_socket; updating root password using native password plugin."
-				# If CURRENT_ROOT_PASSWORD is not set, prompt the user
-				if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
-					read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
-					echo
-				fi
-				if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
-					sudo mysql -uroot -p"$CURRENT_ROOT_PASSWORD" <<EOF
+            else
+                AUTH_PLUGIN=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+                if [[ "$AUTH_PLUGIN" == "unix_socket" ]]; then
+                    echo "Unix socket authentication detected; updating root password using socket auth."
+                    sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
+FLUSH PRIVILEGES;
+EOF
+                else
+                    echo "Authentication plugin is not unix_socket; updating root password using native password plugin."
+                    # If CURRENT_ROOT_PASSWORD is not set, prompt the user
+                    if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
+                        read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
+                        echo
+                    fi
+                    if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
+                        sudo mysql -uroot -p"$CURRENT_ROOT_PASSWORD" <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
-				else
-					sudo mysql -uroot <<EOF
+                    else
+                        sudo mysql -uroot <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
-				fi
-			fi
-			;;
-
-
+                    fi
+                fi
+            fi
+            ;;
         
         "MySQL")
             pkg_install mysql-server
-            systemctl enable --now mysql
+            sudo systemctl enable --now mysql
 
             echo "Applying secure MySQL configuration..."
             mysql -u root <<EOF
@@ -755,7 +762,7 @@ EOF
         
         "Percona")
             pkg_install percona-server-server
-            systemctl enable --now mysql
+            sudo systemctl enable --now mysql
 
             echo "Applying secure Percona configuration..."
             mysql -u root <<EOF
@@ -768,11 +775,11 @@ EOF
         
         "MongoDB")
             if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-                wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
-                echo "deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+                wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
+                echo "deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
                 update_system
                 pkg_install mongodb-org
-                systemctl enable --now mongod
+                sudo systemctl enable --now mongod
             elif [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux|fedora)$ ]]; then
                 cat <<EOF | sudo tee /etc/yum.repos.d/mongodb-org-6.0.repo
 [mongodb-org-6.0]
@@ -784,7 +791,7 @@ gpgkey=https://www.mongodb.org/static/pgp/server-6.0.asc
 EOF
                 update_system
                 pkg_install mongodb-org
-                systemctl enable --now mongod
+                sudo systemctl enable --now mongod
             else
                 log_error "MongoDB repository setup not configured for distro: $DISTRO"
             fi
@@ -838,7 +845,7 @@ install_messaging_queue() {
             KAFKA_SCALA="2.13"
             wget "https://downloads.apache.org/kafka/2.8.1/kafka_${KAFKA_SCALA}-${KAFKA_VERSION}.tgz" -O /tmp/kafka.tgz
             tar -xzf /tmp/kafka.tgz -C /opt
-            mv /opt/kafka_${KAFKA_SCALA}-${KAFKA_VERSION} /opt/kafka
+            sudo mv /opt/kafka_${KAFKA_SCALA}-${KAFKA_VERSION} /opt/kafka
             ;;
         "None")
             echo "No messaging queue selected."
@@ -861,8 +868,8 @@ install_web_server() {
         "Caddy")
             if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
                 pkg_install debian-keyring debian-archive-keyring apt-transport-https
-                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | tee /etc/apt/trusted.gpg.d/caddy-stable.asc
-                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
+                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
                 update_system
                 pkg_install caddy
             else
@@ -900,7 +907,7 @@ server {
     }
 }
 EOF
-                ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/
+                sudo ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/
             else
                 cat <<EOF > /etc/apache2/sites-available/"$DOMAIN".conf
 <VirtualHost *:80>
@@ -914,14 +921,14 @@ EOF
     CustomLog \${APACHE_LOG_DIR}/$DOMAIN-access.log combined
 </VirtualHost>
 EOF
-                a2ensite "$DOMAIN".conf
+                sudo a2ensite "$DOMAIN".conf
             fi
         done
         if [[ "$WEB_SERVER" == "Nginx" ]]; then
-            systemctl reload nginx
+            sudo systemctl reload nginx
         else
-            a2dissite 000-default
-            systemctl reload apache2
+            sudo a2dissite 000-default
+            sudo systemctl reload apache2
         fi
         echo "Installing Certbot and obtaining SSL certificates..."
         if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
@@ -931,7 +938,7 @@ EOF
             pkg_install certbot
         fi
         CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
-        certbot --${CERTBOT_PLUGIN} -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
+        sudo certbot --${CERTBOT_PLUGIN} -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
     elif [[ "$WEB_SERVER" == "Caddy" ]]; then
         echo "Configuring Caddy using Caddyfile..."
         cat <<EOF > /etc/caddy/Caddyfile
@@ -947,16 +954,16 @@ $(for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
     echo "}"
 done)
 EOF
-        systemctl reload caddy
+        sudo systemctl reload caddy
     elif [[ "$WEB_SERVER" == "Lighttpd" ]]; then
         echo "Configuring Lighttpd..."
         for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
             DOMAIN=$(echo "$DOMAIN" | xargs)
             mkdir -p "$DOC_ROOT/$DOMAIN"
         done
-        lighty-enable-mod fastcgi
-        lighty-enable-mod fastcgi-php
-        systemctl reload lighttpd
+        sudo lighty-enable-mod fastcgi
+        sudo lighty-enable-mod fastcgi-php
+        sudo systemctl reload lighttpd
     fi
 }
 
@@ -987,11 +994,11 @@ EOF
         if ! grep -q "gzip on;" /etc/nginx/nginx.conf; then
             sed -i 's/http {*/http { \ngzip on;\ngzip_vary on;\ngzip_proxied any;\ngzip_comp_level 6;\ngzip_min_length 256;\ngzip_types text\/plain application\/xml application\/javascript text\/css;/' /etc/nginx/nginx.conf
         fi
-        systemctl reload nginx
+        sudo systemctl reload nginx
     elif [[ "$WEB_SERVER" == "Apache" ]]; then
-        a2enmod http2 deflate
+        sudo a2enmod http2 deflate
         sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
-        systemctl restart apache2
+        sudo systemctl restart apache2
     fi
     if [[ "$DB_ENGINE" == "MySQL" || "$DB_ENGINE" == "MariaDB" || "$DB_ENGINE" == "Percona" ]]; then
         grep -q "innodb_buffer_pool_size" /etc/mysql/my.cnf || cat <<EOF >> /etc/mysql/my.cnf
@@ -1001,12 +1008,12 @@ innodb_buffer_pool_size=256M
 max_connections=150
 thread_cache_size=50
 EOF
-        systemctl restart mysql 2>/dev/null || systemctl restart mariadb
+        sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb
     elif [[ "$DB_ENGINE" == "PostgreSQL" ]]; then
         PG_CONF="/etc/postgresql/$(ls /etc/postgresql)/main/postgresql.conf"
         sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" "$PG_CONF"
         sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" "$PG_CONF"
-        systemctl restart postgresql
+        sudo systemctl restart postgresql
     fi
 }
 
@@ -1028,11 +1035,11 @@ security_harden() {
     fi
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
          pkg_install unattended-upgrades
-         dpkg-reconfigure -plow unattended-upgrades || true
+         sudo dpkg-reconfigure -plow unattended-upgrades || true
     else
          log_info "Skipping dpkg-reconfigure for unattended-upgrades on non-Debian based system."
     fi
-    systemctl restart fail2ban
+    sudo systemctl restart fail2ban
     echo "Security hardening complete."
 }
 
@@ -1066,7 +1073,7 @@ harden_ssh_config() {
         if [[ -n "${SSH_ALLOWED_USERS:-}" ]]; then
             sed -i "s/^#*AllowUsers.*/AllowUsers $SSH_ALLOWED_USERS/" /etc/ssh/sshd_config
         fi
-        systemctl reload sshd
+        sudo systemctl reload sshd
         echo "Hardened SSH configuration applied."
     else
         echo "SSH configuration file not found; skipping SSH hardening."
@@ -1082,8 +1089,8 @@ setup_ssh_deployment() {
         if id "$DEPLOY_USER" &>/dev/null; then
             echo "User $DEPLOY_USER already exists."
         else
-            adduser --disabled-password --gecos "" "$DEPLOY_USER"
-            usermod -aG sudo "$DEPLOY_USER"
+            sudo adduser --disabled-password --gecos "" "$DEPLOY_USER"
+            sudo usermod -aG sudo "$DEPLOY_USER"
             echo "Created deployment user $DEPLOY_USER."
         fi
         DEPLOY_AUTH_DIR="/home/$DEPLOY_USER/.ssh"
@@ -1093,7 +1100,7 @@ setup_ssh_deployment() {
         if [[ -n "$DEPLOY_SSH_KEY" ]]; then
             echo "$DEPLOY_SSH_KEY" > "$DEPLOY_AUTH_DIR/authorized_keys"
             chmod 600 "$DEPLOY_AUTH_DIR/authorized_keys"
-            chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$DEPLOY_AUTH_DIR"
+            sudo chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$DEPLOY_AUTH_DIR"
             echo "SSH key added for $DEPLOY_USER."
         else
             echo "No SSH key provided; skipping key configuration for $DEPLOY_USER."
@@ -1196,7 +1203,7 @@ install_phpmyadmin() {
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
          pkg_install phpmyadmin
          if [ -d "/usr/share/phpmyadmin" ] && [ ! -L "$DOC_ROOT/phpmyadmin" ]; then
-             ln -s /usr/share/phpmyadmin "$DOC_ROOT/phpmyadmin"
+             sudo ln -s /usr/share/phpmyadmin "$DOC_ROOT/phpmyadmin"
          fi
     else
          echo "phpMyAdmin installation on this distribution requires manual configuration."
@@ -1243,26 +1250,26 @@ install_lamp() {
 setup_firewall() {
     echo "Configuring firewall..."
     if [[ "$FIREWALL" == "ufw" ]]; then
-        ufw allow OpenSSH
+        sudo ufw allow OpenSSH
         if [[ "$WEB_SERVER" == "Nginx" || "$WEB_SERVER" == "Caddy" || "$WEB_SERVER" == "Lighttpd" ]]; then
-            ufw allow 'Nginx Full' 2>/dev/null || true
-            ufw allow 80/tcp
-            ufw allow 443/tcp
+            sudo ufw allow 'Nginx Full' 2>/dev/null || true
+            sudo ufw allow 80/tcp
+            sudo ufw allow 443/tcp
         else
-            ufw allow 'Apache Full'
+            sudo ufw allow 'Apache Full'
         fi
-        ufw --force enable
+        sudo ufw --force enable
     elif [[ "$FIREWALL" == "firewalld" ]]; then
-        systemctl start firewalld
-        systemctl enable firewalld
+        sudo systemctl start firewalld
+        sudo systemctl enable firewalld
         if [[ "$USE_HARDENED_SSH" == true ]]; then
-            firewall-cmd --permanent --add-port=2222/tcp
+            sudo firewall-cmd --permanent --add-port=2222/tcp
         else
-            firewall-cmd --permanent --add-service=ssh
+            sudo firewall-cmd --permanent --add-service=ssh
         fi
-        firewall-cmd --permanent --add-service=http
-        firewall-cmd --permanent --add-service=https
-        firewall-cmd --reload
+        sudo firewall-cmd --permanent --add-service=http
+        sudo firewall-cmd --permanent --add-service=https
+        sudo firewall-cmd --reload
     else
         echo "Warning: No recognized firewall management found for ${DISTRO}. Skipping firewall configuration."
     fi
@@ -1284,7 +1291,7 @@ upgrade_system() {
 uninstall_components() {
     echo "Uninstalling installed components..."
     for service in apache2 nginx caddy lighttpd mysql mariadb postgresql mongod; do
-        systemctl stop "$service" 2>/dev/null || true
+        sudo systemctl stop "$service" 2>/dev/null || true
     done
 
     PACKAGES_TO_REMOVE=(
@@ -1299,26 +1306,26 @@ uninstall_components() {
     done
 
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        apt-get autoremove -y && apt-get autoclean
+        sudo apt-get autoremove -y && sudo apt-get autoclean
     elif [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ]]; then
         if command -v dnf >/dev/null 2>&1; then
-            dnf autoremove -y
+            sudo dnf autoremove -y
         else
-            yum autoremove -y
+            sudo yum autoremove -y
         fi
     fi
 
-    rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
+    sudo rm -rf /etc/apache2 /etc/nginx /etc/caddy "$DOC_ROOT" /etc/php /etc/mysql /etc/postgresql /etc/letsencrypt /etc/fail2ban docker-compose.yml site.yml
 
     if [[ "$FIREWALL" == "ufw" ]]; then
         if command -v ufw >/dev/null 2>&1; then
-            ufw disable || true
+            sudo ufw disable || true
         else
             echo "⚠️  UFW not found; skipping firewall disable for ufw."
         fi
     else
-        systemctl stop firewalld || true
-        systemctl disable firewalld || true
+        sudo systemctl stop firewalld || true
+        sudo systemctl disable firewalld || true
     fi
     echo "Components uninstalled."
 }
