@@ -107,6 +107,16 @@ pkg_install() {
       apt-get update
       install_with_retry apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
     fi
+  elif [[ "$DISTRO" == "rocky" ]]; then
+    if ! install_with_retry dnf install -y "${pkgs[@]}"; then
+      echo "⚠️  Attempting to enable required repositories for Rocky Linux..."
+      # Ensure EPEL is available
+      dnf install -y epel-release
+      # Enable CodeReady Linux Builder (CRB) repository
+      dnf config-manager --set-enabled crb
+      # Retry installation
+      install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+    fi
   else
     if ! install_with_retry dnf install -y "${pkgs[@]}"; then
       echo "⚠️  Trying to enable required repositories..."
@@ -115,6 +125,7 @@ pkg_install() {
     fi
   fi
 }
+
 
 ##########################################
 # Miscellaneous Package Management       #
