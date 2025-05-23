@@ -943,14 +943,6 @@ install_phpmyadmin() {
 # Replace it with a call to our new function:
 enable_apache_module "rewrite"
 
-# -----------------------------------------------------------------------------
-# phpMyAdmin Installation Step
-# -----------------------------------------------------------------------------
-install_phpmyadmin
-if [ $? -ne 0 ]; then
-  echo "phpMyAdmin installation skipped. Please configure it manually as shown above."
-fi
-
 # Upgrade system and reconfigure services.
 upgrade_system() {
     log_info "Upgrading system and reconfiguring services..."
