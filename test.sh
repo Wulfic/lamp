@@ -957,9 +957,25 @@ upgrade_system() {
 # Uninstall components
 uninstall_components() {
     log_info "Preparing to uninstall components..."
-    local PACKAGES_TO_REMOVE=( "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" "mysql-server" "mariadb-server" "percona-server-server" "postgresql" "php*" "certbot" "${FIREWALL}" "vsftpd" "unattended-upgrades" "fail2ban" "redis-server" "rabbitmq-server" )
+
+    # List of packages includes phpMyAdmin for removal
+    local PACKAGES_TO_REMOVE=( \
+        "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" \
+        "mysql-server" "mariadb-server" "percona-server-server" "postgresql" \
+        "php*" "phpmyadmin" \
+        "certbot" "${FIREWALL}" "vsftpd" "unattended-upgrades" "fail2ban" \
+        "redis-server" "rabbitmq-server" \
+    )
     log_info "Packages to be removed: ${PACKAGES_TO_REMOVE[*]}"
-    local DIRS_TO_REMOVE=( "/etc/apache2" "/etc/nginx" "/etc/caddy" "${DOC_ROOT}" "/etc/php" "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt" "/etc/fail2ban" "docker-compose.yml" "site.yml" )
+
+    # List of directories, now including phpMyAdmin config/data locations
+    local DIRS_TO_REMOVE=( \
+        "/etc/apache2" "/etc/nginx" "/etc/caddy" "${DOC_ROOT}" "/etc/php" \
+        "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt" "/etc/fail2ban" \
+        "/etc/phpmyadmin" "/etc/phpMyAdmin" "/usr/share/phpmyadmin" "/usr/share/phpMyAdmin" \
+        "docker-compose.yml" "site.yml" \
+    )
+    # Additional directories for RPM-based distributions (CentOS, RHEL, Rocky Linux, AlmaLinux)
     if [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
         DIRS_TO_REMOVE+=( "/var/lib/mysql" "/etc/my.cnf" "/etc/my.cnf.d" )
     fi
@@ -1008,6 +1024,7 @@ uninstall_components() {
     fi
     log_info "Uninstallation complete."
 }
+
 
 ##############################
 # Installation Modes
