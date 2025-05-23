@@ -690,12 +690,20 @@ install_database() {
             systemctl enable --now mariadb
 
             echo "Applying secure MariaDB configuration..."
-            sudo mysql <<EOF
+            # Check the authentication plugin used for root@localhost
+            AUTH_PLUGIN=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+            if [[ "$AUTH_PLUGIN" == "unix_socket" ]]; then
+                echo "Unix socket authentication detected; updating root password using socket auth."
+                sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
+            else
+                echo "Authentication plugin is not unix_socket; setting root to use mysql_native_password."
+                sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD'; FLUSH PRIVILEGES;"
+            fi
             ;;
         
         "MySQL")
