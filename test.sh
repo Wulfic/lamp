@@ -1037,6 +1037,27 @@ main() {
         printf "${RED}%s\n" "$line"
     done
     printf "${NC}\n"  # Reset color
+	
+echo ""	
+echo "##########################################################################"
+echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
+echo "# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, Fedora, and RHEL"
+echo "#"
+echo "# This script installs a flexible stack with options for:"
+echo "# • Multiple database engines: MySQL, MariaDB, PostgreSQL, SQLite, Percona, MongoDB, OracleXE"
+echo "# • Multiple web servers: Apache (or httpd on RPM‑based systems), Nginx, Caddy, Lighttpd"
+echo "# • Extended caching: Redis (or redis on RPM‑based systems), Memcached, Varnish"
+echo "# • Messaging queues: RabbitMQ, Kafka"
+echo "# • Containerization & automation support: Docker Compose file generation, Ansible playbook export"
+echo "# • SSH Setup Options: Standard SSH or Hardened SSH (Protocol 2, key‑only auth, custom ciphers, etc.)"
+echo "#"
+echo "# IMPORTANT:"
+echo "#   - OracleXE is not supported automatically."
+echo "#   - Varnish caching is only allowed with Nginx."
+echo "#   - A log file (\"installer.log\") is created on your Desktop or home directory."
+echo "#"
+echo "# Note: This version includes distro‑specific adjustments and logging for easier debugging."
+echo "##########################################################################"
 
     # User interactive prompts (skip for uninstall mode)
     if [[ "${MODE:-}" != "uninstall" ]]; then
