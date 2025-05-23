@@ -12,6 +12,37 @@ if [[ "$DEBUG" == true ]]; then
   set -x
 fi
 
+
+
+# If DISTRO isn’t already set from the environment, attempt to detect it automatically.
+if [ -z "${DISTRO-}" ]; then
+    if [ -f /etc/os-release ]; then
+        # Source /etc/os-release to load variables like ID.
+        . /etc/os-release
+        # Normalize the distro ID to lowercase.
+        detected_distro=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
+    else
+        echo "Warning: /etc/os-release not found. Defaulting to 'ubuntu'." >&2
+        detected_distro="ubuntu"
+    fi
+else
+    # If DISTRO was predefined, normalize its value.
+    detected_distro=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
+fi
+
+# Validate that the detected distro is in the list of supported distributions.
+case "$detected_distro" in
+    ubuntu|debian|centos|rocky|almalinux|fedora|rhel)
+        DISTRO="$detected_distro"
+        ;;
+    *)
+        echo "Error: Unsupported Linux distribution: $detected_distro" >&2
+        exit 1
+        ;;
+esac
+
+echo "Running the script on: $DISTRO"
+
 ##########################################
 # Logging Functions                      #
 ##########################################
