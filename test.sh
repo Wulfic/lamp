@@ -41,15 +41,112 @@ log_info() {
 # Pre-execution Dependency Check         #
 ##########################################
 check_dependencies() {
-    local deps=("apt-get" "dnf" "yum" "systemctl" "wget" "tar")
-    for dep in "${deps[@]}"; do
-        if ! command -v "$dep" >/dev/null 2>&1; then
-            log_error "Required command '$dep' is not available. Please install it."
-            exit 1
+    # 1. Verify Bash version (Bash 4+ is required for arrays and associative arrays)
+    if [[ ${BASH_VERSINFO[0]} -lt 4 ]]; then
+        log_error "Bash version 4 or higher is required. Detected version: ${BASH_VERSINFO[0]}."
+        return 1
+    fi
+
+    # 2. Network connectivity check: Ensure we can reach an external host
+    if ! ping -c 1 -W 2 google.com &>/dev/null; then
+        log_error "Network connectivity appears to be unavailable. Please check your connection."
+        return 1
+    fi
+
+    # 3. Check for at least one supported package manager and record which we found.
+    local pkg_manager=""
+    if command -v apt-get >/dev/null 2>&1; then
+        pkg_manager="apt-get"
+    elif command -v dnf >/dev/null 2>&1; then
+        pkg_manager="dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        pkg_manager="yum"
+    fi
+
+    if [[ -z "$pkg_manager" ]]; then
+        log_error "No supported package manager found. Please install one of: apt-get, dnf, or yum."
+        return 1
+    fi
+
+    # 4. Prepare a list of essential dependencies along with hints for installation.
+    #    Using an associative array for hints makes it easier to expand recommendations.
+    declare -A dependency_hints
+    dependency_hints["systemctl"]="systemctl (usually part of systemd)"
+    dependency_hints["wget"]="wget (e.g., sudo $pkg_manager install wget)"
+    dependency_hints["tar"]="tar (e.g., sudo $pkg_manager install tar)"
+    dependency_hints["ping"]="ping (often included in iputils-ping, e.g., sudo $pkg_manager install iputils-ping)"
+
+    # Essential commands we want to check.
+    local dependencies=("systemctl" "wget" "tar" "ping")
+
+    # Allow additional dependencies via the EXTRA_DEPS environment variable (space‑separated).
+    if [[ -n "${EXTRA_DEPS:-}" ]]; then
+        for dep in $EXTRA_DEPS; do
+            dependencies+=("$dep")
+        done
+    fi
+
+    # 5. Check each dependency and collect any missing ones.
+    local missing=()
+    for cmd in "${dependencies[@]}"; do
+        if ! command -v "$cmd" &>/dev/null; then
+            # Use the hint if available; otherwise just record the command name.
+            if [[ -n "${dependency_hints[$cmd]}" ]]; then
+                missing+=("$cmd (${dependency_hints[$cmd]})")
+            else
+                missing+=("$cmd")
+            fi
         fi
     done
+
+    # 6. If there are missing dependencies, either attempt auto-install (if enabled) or exit.
+    if [ ${#missing[@]} -gt 0 ]; then
+        log_error "The following essential commands are missing: ${missing[*]}"
+        if [[ "${AUTO_INSTALL_DEPS:-false}" == "true" ]]; then
+            log_info "Attempting to auto-install missing dependencies using $pkg_manager..."
+            local packages_to_install=()
+            # Strip hints (everything after a space) to derive a package name.
+            for dep in "${missing[@]}"; do
+                packages_to_install+=( "$(echo "$dep" | cut -d' ' -f1)" )
+            done
+
+            # Use the appropriate package manager command.
+            case $pkg_manager in
+                apt-get)
+                    sudo apt-get update && sudo apt-get install -y "${packages_to_install[@]}"
+                    ;;
+                dnf)
+                    sudo dnf install -y "${packages_to_install[@]}"
+                    ;;
+                yum)
+                    sudo yum install -y "${packages_to_install[@]}"
+                    ;;
+            esac
+
+            # Re-check if any dependencies are still missing.
+            local still_missing=()
+            for cmd in "${dependencies[@]}"; do
+                if ! command -v "$cmd" &>/dev/null; then
+                    still_missing+=("$cmd")
+                fi
+            done
+            if [ ${#still_missing[@]} -gt 0 ]; then
+                log_error "Auto-installation failed for the following commands: ${still_missing[*]}"
+                return 1
+            else
+                log_info "All missing dependencies were auto-installed successfully."
+            fi
+        else
+            log_error "Please install the missing dependencies and re-run the script."
+            return 1
+        fi
+    else
+        log_info "All required dependencies are available."
+    fi
+
+    return 0
 }
-check_dependencies
+
 
 # Default DOC_ROOT initialization to avoid unbound variable issues (especially during uninstall)
 DOC_ROOT=${DOC_ROOT:-/var/www/html}
