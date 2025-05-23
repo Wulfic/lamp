@@ -503,66 +503,76 @@ fi
 
 install_database() {
     echo "Installing database engine: $DB_ENGINE"
+    
+    # Ensure we switch to MariaDB if MySQL is unavailable on Rocky Linux
     if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
         echo "MySQL is not available by default on $PRETTY_NAME; switching to MariaDB."
         DB_ENGINE="MariaDB"
     fi
+    
     case $DB_ENGINE in
-        "MySQL")
-            pkg_install mysql-server
-            mysql_secure_installation <<EOF
-y
-$DB_PASSWORD
-$DB_PASSWORD
-y
-y
-y
-y
-EOF
-            ;;
         "MariaDB")
             pkg_install mariadb-server
-            mysql_secure_installation <<EOF
-y
-$DB_PASSWORD
-$DB_PASSWORD
-y
-y
-y
-y
+            systemctl enable --now mariadb
+
+            echo "Applying secure MariaDB configuration..."
+            mysql -u root <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
 EOF
             ;;
+        
+        "MySQL")
+            pkg_install mysql-server
+            systemctl enable --now mysql
+
+            echo "Applying secure MySQL configuration..."
+            mysql -u root <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
+EOF
+            ;;
+        
         "PostgreSQL")
             pkg_install postgresql postgresql-contrib
             sudo -u postgres psql -c "ALTER USER postgres PASSWORD '$DB_PASSWORD';"
             ;;
+        
         "SQLite")
             echo "SQLite is already installed with PHP support."
             ;;
+        
         "Percona")
             pkg_install percona-server-server
-            mysql_secure_installation <<EOF
-y
-$DB_PASSWORD
-$DB_PASSWORD
-y
-y
-y
-y
+            systemctl enable --now mysql
+
+            echo "Applying secure Percona configuration..."
+            mysql -u root <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
 EOF
             ;;
+        
         "MongoDB")
             wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
-            echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg ] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+            echo "deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
             update_system
             pkg_install mongodb-org
-            systemctl start mongod && systemctl enable mongod
+            systemctl enable --now mongod
             ;;
+        
         "OracleXE")
             echo "Oracle XE installation requires manual steps. Please refer to Oracle documentation."
             ;;
     esac
 }
+
 
 install_ftp_sftp() {
     if [[ "${INSTALL_FTP:-false}" = true ]]; then
