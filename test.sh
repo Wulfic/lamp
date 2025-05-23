@@ -294,12 +294,10 @@ best_php_version() {
 ##########################################
 # PHP Installation Function              #
 ##########################################
-##########################################
-# PHP Installation Function              #
-##########################################
 install_php() {
     local version_lc="${PHP_VERSION,,}"
     echo "Installing PHP ${version_lc} and necessary modules..."
+    
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
         pkg_install "php${version_lc}" "php${version_lc}-cli" "php${version_lc}-mysql" \
                     "php${version_lc}-gd" "php${version_lc}-curl" "php${version_lc}-mbstring" \
@@ -333,23 +331,38 @@ install_php() {
         # Reset any existing PHP module settings
         dnf module reset php -y
 
-        # Enable the desired Remi PHP module stream
-        if ! dnf module enable php:remi-"${version_lc}" -y; then
-            log_error "Failed to enable php:remi-${version_lc} module stream"
-            exit 1
-        fi
+        if [[ "$DISTRO" == "rocky" ]]; then
+            # For Rocky Linux, attempt enabling and installing the Remi module stream with a fallback.
+            if dnf module enable php:remi-"${version_lc}" -y && dnf module install php:remi-"${version_lc}" -y; then
+                echo "Remi PHP module stream successfully enabled on Rocky Linux."
+            else
+                log_error "Failed to enable/install php:remi-${version_lc} module stream on Rocky Linux. Falling back to regular dnf installation."
+                # Fall back: do not exit but proceed with a regular dnf install below.
+            fi
 
-        # Force the installation of the PHP module group from Remi
-        if ! dnf module install php:remi-"${version_lc}" -y; then
-            log_error "Failed to install php:remi-${version_lc} module group"
-            exit 1
-        fi
+            # Proceed with installing PHP packages using the generic package names
+            pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
 
-        # Now install the necessary PHP packages. With the module installed, package names are generic.
-        pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
+            if [[ "$DB_ENGINE" == "SQLite" ]]; then
+                pkg_install ${PHP_MODULES[sqlite]}
+            fi
+        else
+            # For non-Rocky RPM-based systems, enforce the Remi module stream installation.
+            if ! dnf module enable php:remi-"${version_lc}" -y; then
+                log_error "Failed to enable php:remi-${version_lc} module stream"
+                exit 1
+            fi
 
-        if [[ "$DB_ENGINE" == "SQLite" ]]; then
-            pkg_install ${PHP_MODULES[sqlite]}
+            if ! dnf module install php:remi-"${version_lc}" -y; then
+                log_error "Failed to install php:remi-${version_lc} module group"
+                exit 1
+            fi
+
+            pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
+
+            if [[ "$DB_ENGINE" == "SQLite" ]]; then
+                pkg_install ${PHP_MODULES[sqlite]}
+            fi
         fi
     fi
 }
