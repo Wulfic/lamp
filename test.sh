@@ -854,33 +854,36 @@ install_messaging_queue() {
 }
 
 install_web_server() {
-    case $WEB_SERVER in
-        "Nginx")
-            pkg_install nginx
-            ;;
-        "Apache")
-            if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-                pkg_install apache2 apache2-utils
-            else
-                pkg_install "$APACHE_PACKAGE"
-            fi
-            ;;
-        "Caddy")
-            if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-                pkg_install debian-keyring debian-archive-keyring apt-transport-https
-                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
-                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-                update_system
-                pkg_install caddy
-            else
-                echo "Caddy installation on this distribution may require manual intervention."
-            fi
-            ;;
-        "Lighttpd")
-            pkg_install lighttpd
-            ;;
-    esac
+	  case $WEB_SERVER in
+		"Nginx")
+			  pkg_install nginx
+			  ;;
+		"Apache")
+			  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+				  pkg_install apache2 apache2-utils
+			  else
+				  pkg_install "$APACHE_PACKAGE"
+				  # Suggestion 1: Enable and start Apache (httpd) on RPM‑based distributions immediately after installation.
+				  sudo systemctl enable --now "$APACHE_PACKAGE"
+			  fi
+			  ;;
+		"Caddy")
+			  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+				  pkg_install debian-keyring debian-archive-keyring apt-transport-https
+				  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
+				  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+				  update_system
+				  pkg_install caddy
+			  else
+				  echo "Caddy installation on this distribution may require manual intervention."
+			  fi
+			  ;;
+		"Lighttpd")
+			  pkg_install lighttpd
+			  ;;
+		esac
 }
+
 
 setup_virtual_hosts() {
     echo "Setting up virtual hosts..."
