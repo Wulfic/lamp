@@ -291,13 +291,20 @@ best_php_version() {
 # PHP Installation Function              #
 ##########################################
 install_php() {
+    # Check if PHP is already installed
+    if command -v php >/dev/null 2>&1; then
+        echo "PHP is already installed at $(command -v php): $(php -v | head -n 1)"
+        return 0
+    fi
+
     # Lowercase version of PHP_VERSION for consistency
     local version_lc="${PHP_VERSION,,}"
     echo "Installing PHP ${version_lc} and necessary modules..."
+    
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
         pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
         if [[ "$DB_ENGINE" == "SQLite" ]]; then
-            pkg_install ${PHP_MODULES[sqlite]}
+            pkg_install "${PHP_MODULES[sqlite]}"
         fi
     else
         # Determine the correct Remi repository package URL based on distro
@@ -312,6 +319,7 @@ install_php() {
         else
             REMI_RPM="https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
         fi
+        
         # Install Remi repository if not already present
         if ! rpm -q remi-release >/dev/null 2>&1; then
             pkg_install "$REMI_RPM"
@@ -334,7 +342,7 @@ install_php() {
         # Use versioned package names from the enabled module stream
         pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysqlnd" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
         if [[ "$DB_ENGINE" == "SQLite" ]]; then
-            pkg_install ${PHP_MODULES[sqlite]}
+            pkg_install "${PHP_MODULES[sqlite]}"
         fi
     fi
 }
@@ -469,13 +477,23 @@ if [[ "${MODE:-}" != "uninstall" ]]; then
             check_compatibility
         fi
 
-        if [[ -d "$HOME/Desktop" ]]; then
-             LOGFILE="$HOME/Desktop/installer.log"
-        else
-             LOGFILE="$HOME/installer.log"
-        fi
-        echo "Installation started at $(date)" > "$LOGFILE"
-        exec > >(tee -a "$LOGFILE") 2>&1
+        # Updated Log File Location:
+		# If the script is run with sudo, use SUDO_USER's home directory rather than /root
+		if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+			USER_HOME=$(eval echo "~$SUDO_USER")
+		else
+			USER_HOME=$HOME
+		fi
+
+		if [[ -d "$USER_HOME/Desktop" ]]; then
+			LOGFILE="$USER_HOME/Desktop/installer.log"
+		else
+			LOGFILE="$USER_HOME/installer.log"
+		fi
+
+		echo "Installation started at $(date)" > "$LOGFILE"
+		exec > >(tee -a "$LOGFILE") 2>&1
+
     fi
 fi
 
