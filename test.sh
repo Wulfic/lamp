@@ -1337,6 +1337,11 @@ uninstall_components() {
         "/etc/php" "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt"
         "/etc/fail2ban" "docker-compose.yml" "site.yml"
     )
+    # For RPM‑based distributions (e.g., Rocky Linux) remove MariaDB's data and additional config dirs
+    if [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
+        DIRS_TO_REMOVE+=( "/var/lib/mysql" "/etc/my.cnf" "/etc/my.cnf.d" )
+    fi
+
     for item in "${DIRS_TO_REMOVE[@]}"; do
         echo "  - $item"
     done
@@ -1388,6 +1393,7 @@ uninstall_components() {
 
     echo "Components uninstalled."
 }
+
 
 
 ###################################
