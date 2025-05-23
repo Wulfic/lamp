@@ -912,19 +912,19 @@ EOF
         sudo systemctl reload nginx
 
     elif [[ "$WEB_SERVER" == "Apache" ]]; then
-        # Set Apache-related variables based on distribution
+        # Define Apache-related settings with arrays for the command variables.
         if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
             VHOST_DIR="/etc/apache2/sites-available"
-            ENABLE_SITE="sudo a2ensite"
-            DISABLE_DEFAULT="sudo a2dissite 000-default"
-            RELOAD_CMD="sudo systemctl reload apache2"
+            ENABLE_SITE=(sudo a2ensite)
+            DISABLE_DEFAULT=(sudo a2dissite "000-default")
+            RELOAD_CMD=(sudo systemctl reload apache2)
             APACHE_LOG_DIR="/var/log/apache2"
         else
-            # Assuming Rocky Linux, CentOS, AlmaLinux, etc.
+            # For Rocky Linux, CentOS, AlmaLinux, etc.
             VHOST_DIR="/etc/httpd/conf.d"
-            ENABLE_SITE=":"      # No enabling step is needed
-            DISABLE_DEFAULT=":"  # No default site to disable
-            RELOAD_CMD="sudo systemctl reload httpd"
+            ENABLE_SITE=(":")      # No enabling step is needed
+            DISABLE_DEFAULT=(":")  # No default site to disable
+            RELOAD_CMD=(sudo systemctl reload httpd)
             APACHE_LOG_DIR="/var/log/httpd"
         fi
 
@@ -943,24 +943,16 @@ EOF
     CustomLog ${APACHE_LOG_DIR}/$DOMAIN-access.log combined
 </VirtualHost>
 EOF
-            $ENABLE_SITE "$DOMAIN.conf"
+            "${ENABLE_SITE[@]}" "$DOMAIN.conf"
         done
 
-        # Disable the default site if on a Debian‑based system
-        $DISABLE_DEFAULT
+        # Disable the default site if on a Debian-based system.
+        "${DISABLE_DEFAULT[@]}"
 
-        $RELOAD_CMD
+        # Reload Apache using the array command.
+        "${RELOAD_CMD[@]}"
 
-        echo "Installing Certbot and obtaining SSL certificates..."
-        if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
-            CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
-            pkg_install certbot "python3-certbot-${CERTBOT_PLUGIN}"
-        else
-            pkg_install certbot
-        fi
-
-        CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
-        sudo certbot --${CERTBOT_PLUGIN} -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
+        echo "Virtual hosts for Apache have been configured."
 
     elif [[ "$WEB_SERVER" == "Caddy" ]]; then
         echo "Configuring Caddy using Caddyfile..."
@@ -990,6 +982,7 @@ EOF
         sudo systemctl reload lighttpd
     fi
 }
+
 
 
 optimize_performance() {
