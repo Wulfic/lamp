@@ -690,10 +690,10 @@ install_database() {
             systemctl enable --now mariadb
 
             echo "Applying secure MariaDB configuration..."
-            mysql -u root <<EOF
+            sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
 DELETE FROM mysql.user WHERE User='';
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
             ;;
