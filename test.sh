@@ -850,18 +850,71 @@ EOF
     log_info "Ansible playbook generated: site.yml"
 }
 
-# Install phpMyAdmin (for Debian-based systems)
-install_phpmyadmin() {
-    log_info "Installing phpMyAdmin..."
-    if is_debian; then
-         pkg_install phpmyadmin
-         if [[ -d "/usr/share/phpmyadmin" && ! -L "${DOC_ROOT}/phpmyadmin" ]]; then
-             sudo ln -s /usr/share/phpmyadmin "${DOC_ROOT}/phpmyadmin"
-         fi
+# -----------------------------------------------------------------------------
+# Function: Enable Apache Modules
+# -----------------------------------------------------------------------------
+enable_apache_module() {
+  local module=$1
+  if [[ "$DISTRO_ID" == "debian" || "$DISTRO_ID" == "ubuntu" ]]; then
+    echo "Enabling $module using a2enmod..."
+    sudo a2enmod "$module"
+  else
+    echo "Rocky Linux detected: Skipping a2enmod for module $module."
+    # Optionally, try to uncomment the LoadModule line (if it exists) in Apache's config
+    # Adjust the file below to match your Apache configuration file if needed.
+    local conf_file="/etc/httpd/conf.modules.d/00-base.conf"
+    if [ -f "$conf_file" ]; then
+      sudo sed -i "/LoadModule ${module}_module/ s/^#//" "$conf_file"
+      echo "$module should now be enabled in $conf_file."
     else
-         log_error "phpMyAdmin installation on $DISTRO requires manual configuration."
+      echo "Warning: Apache configuration file not found; please ensure $module is loaded manually."
     fi
+  fi
 }
+
+# -----------------------------------------------------------------------------
+# Function: Install and Configure phpMyAdmin
+# -----------------------------------------------------------------------------
+install_phpmyadmin() {
+  if [[ "$DISTRO_ID" == "rocky" ]]; then
+    echo "Manual configuration required for phpMyAdmin installation on Rocky Linux."
+    echo "---------------------------------------------------------"
+    echo "Steps to install and configure phpMyAdmin manually:"
+    echo "1. Install phpMyAdmin from the EPEL repository:"
+    echo "     sudo dnf install epel-release"
+    echo "     sudo dnf install phpMyAdmin"
+    echo "2. Edit the Apache configuration file:"
+    echo "     sudo vi /etc/httpd/conf.d/phpMyAdmin.conf"
+    echo "   Adjust access controls (for example, replace 'Require local' with 'Require all granted' or a more secure alternative)."
+    echo "3. Ensure SELinux and firewall rules allow access as needed."
+    echo "4. Restart Apache:"
+    echo "     sudo systemctl restart httpd"
+    echo "---------------------------------------------------------"
+    # Skip further automatic configuration for phpMyAdmin
+    return 1
+  else
+    echo "Proceeding with automatic phpMyAdmin configuration..."
+    # Insert your Debian/Ubuntu style phpMyAdmin configuration here
+    # For example:
+    # sudo apt-get install phpmyadmin -y
+    # sudo ln -s /usr/share/phpmyadmin /var/www/html/phpmyadmin
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Apache Module Example: Enable mod_rewrite
+# -----------------------------------------------------------------------------
+# If your script previously simply did: sudo a2enmod rewrite
+# Replace it with a call to our new function:
+enable_apache_module "rewrite"
+
+# -----------------------------------------------------------------------------
+# phpMyAdmin Installation Step
+# -----------------------------------------------------------------------------
+install_phpmyadmin
+if [ $? -ne 0 ]; then
+  echo "phpMyAdmin installation skipped. Please configure it manually as shown above."
+fi
 
 # Upgrade system and reconfigure services.
 upgrade_system() {
