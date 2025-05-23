@@ -6,10 +6,50 @@ IFS=$'\n\t'
 trap 'echo "ERROR: An unexpected error occurred at line $LINENO: \"$BASH_COMMAND\""' ERR
 trap 'echo -e "\n🔴 Script interrupted. Cleaning up..."; cleanup; exit 130' SIGINT SIGTERM
 
-DEBUG=false  # Set to true to enable debug mode
+DEBUG=false        # Set to true to enable debug mode
+VERBOSE=false      # Set to true for informational logging
 if [[ "$DEBUG" == true ]]; then
   set -x
 fi
+
+##########################################
+# Logging Functions                      #
+##########################################
+# Enhanced error logging with function name and line number.
+log_error() {
+    local msg="$1"
+    local func="${FUNCNAME[1]:-main}"
+    local line="${BASH_LINENO[0]:-unknown}"
+    echo "ERROR in $func at line $line: $msg" >&2
+    if [[ -n "${LOGFILE:-}" ]]; then
+        echo "$(date +'%Y-%m-%d %T') ERROR in $func (line $line): $msg" >> "$LOGFILE"
+    fi
+}
+
+# Informational logging that respects VERBOSE mode.
+log_info() {
+    local msg="$1"
+    if [[ "${VERBOSE}" == true ]]; then
+        echo "INFO: $msg"
+    fi
+    if [[ -n "${LOGFILE:-}" ]]; then
+        echo "$(date +'%Y-%m-%d %T') INFO: $msg" >> "$LOGFILE"
+    fi
+}
+
+##########################################
+# Pre-execution Dependency Check         #
+##########################################
+check_dependencies() {
+    local deps=("apt-get" "dnf" "yum" "systemctl" "wget" "tar")
+    for dep in "${deps[@]}"; do
+        if ! command -v "$dep" >/dev/null 2>&1; then
+            log_error "Required command '$dep' is not available. Please install it."
+            exit 1
+        fi
+    done
+}
+check_dependencies
 
 # Default DOC_ROOT initialization to avoid unbound variable issues (especially during uninstall)
 DOC_ROOT=${DOC_ROOT:-/var/www/html}
@@ -18,19 +58,10 @@ DOC_ROOT=${DOC_ROOT:-/var/www/html}
 cleanup() {
     if [[ -f /tmp/kafka.tgz ]]; then
         rm -f /tmp/kafka.tgz
-        echo "Cleaned up temporary files."
+        log_info "Cleaned up temporary files."
     fi
 }
 trap cleanup EXIT
-
-# Logging function
-log_error() {
-    local msg="$1"
-    echo "ERROR: $msg" >&2
-    if [[ -n "${LOGFILE:-}" ]]; then
-        echo "$(date +'%Y-%m-%d %T') ERROR: $msg" >> "$LOGFILE"
-    fi
-}
 
 ##########################################
 # Helper Functions                       #
@@ -90,59 +121,77 @@ retry_command() {
 ##########################################
 pkg_install() {
   local pkgs=("$@")
-  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-    if ! install_with_retry apt-get install -y "${pkgs[@]}"; then
-      echo "⚠️  Attempting to add missing repositories..."
-      apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
-      for pkg in "${pkgs[@]}"; do
-        case $pkg in
-          php8.*)
-            add-apt-repository ppa:ondrej/php -y
-            ;;
-          nginx)
-            add-apt-repository ppa:nginx/stable -y
-            ;;
-        esac
-      done
-      apt-get update
-      install_with_retry apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-    fi
-  elif [[ "$DISTRO" == "rocky" ]]; then
-    if ! install_with_retry dnf install -y "${pkgs[@]}"; then
-      echo "⚠️  Attempting to enable required repositories for Rocky Linux..."
-      # Ensure EPEL is available
-      dnf install -y epel-release
-      # Enable CodeReady Linux Builder (CRB) repository
-      dnf config-manager --set-enabled crb
-      # Retry installation
-      install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-    fi
-  else
-    if ! install_with_retry dnf install -y "${pkgs[@]}"; then
-      echo "⚠️  Trying to enable required repositories..."
-      enable_epel_and_powertools
-      install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-    fi
-  fi
+  case "$DISTRO" in
+    ubuntu|debian)
+      if ! install_with_retry apt-get install -y "${pkgs[@]}"; then
+        echo "⚠️  Installation failed on ${DISTRO}. Attempting to add missing repositories..."
+        apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
+        for pkg in "${pkgs[@]}"; do
+          case $pkg in
+            php8.*)
+              add-apt-repository ppa:ondrej/php -y
+              ;;
+            nginx)
+              add-apt-repository ppa:nginx/stable -y
+              ;;
+          esac
+        done
+        apt-get update
+        install_with_retry apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+      ;;
+    centos|rhel|rocky|almalinux)
+      if ! install_with_retry dnf install -y "${pkgs[@]}"; then
+        echo "⚠️  Installation failed on ${DISTRO}. Attempting to enable required repositories..."
+        dnf install -y epel-release || log_error "❌ Could not install epel-release"
+        # Enable repository if needed
+        if [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" ]]; then
+          dnf config-manager --set-enabled powertools || log_error "❌ Could not enable powertools repository"
+        fi
+        if [[ "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" || "$DISTRO" == "rhel" ]]; then
+          dnf config-manager --set-enabled crb || log_error "❌ Could not enable CRB repository"
+        fi
+        install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+      ;;
+    fedora)
+      if ! install_with_retry dnf install -y "${pkgs[@]}"; then
+        echo "⚠️  Installation failed on Fedora. Refreshing metadata and retrying..."
+        dnf makecache || log_error "❌ Could not update package cache on Fedora"
+        install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
+      fi
+      ;;
+    *)
+      log_error "Warning: Unsupported distribution: ${DISTRO}. Attempting to use available package manager for installation."
+      if command -v apt-get >/dev/null 2>&1; then
+          install_with_retry apt-get install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with apt-get on ${DISTRO}"
+      elif command -v dnf >/dev/null 2>&1; then
+          install_with_retry dnf install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with dnf on ${DISTRO}"
+      elif command -v yum >/dev/null 2>&1; then
+          install_with_retry yum install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with yum on ${DISTRO}"
+      else
+          log_error "❌ No known package manager found on ${DISTRO}."
+      fi
+      ;;
+  esac
 }
-
 
 ##########################################
 # Miscellaneous Package Management       #
 ##########################################
 pkg_update() {
-    echo "Updating system..."
+    log_info "Updating system..."
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
         if command -v apt-fast >/dev/null 2>&1; then
-            apt-fast update && apt-fast upgrade -y
+            apt-fast update && apt-fast upgrade -y || { log_error "apt-fast update failed."; exit 2; }
         else
-            apt-get update && apt-get upgrade -y
+            apt-get update && apt-get upgrade -y || { log_error "apt-get update/upgrade failed."; exit 2; }
         fi
     else
         if command -v dnf >/dev/null 2>&1; then
-            dnf update -y
+            dnf update -y || { log_error "dnf update failed."; exit 2; }
         else
-            yum update -y
+            yum update -y || { log_error "yum update failed."; exit 2; }
         fi
     fi
 }
@@ -237,8 +286,9 @@ case $DISTRO in
     centos|rhel|rocky|almalinux|fedora)
         FIREWALL="firewalld" ;;
     *)
-        log_error "Unsupported distro: $DISTRO"
-        exit 1 ;;
+        log_error "Warning: Unsupported distro detected: ${DISTRO}. Installation may fail on this system."
+        FIREWALL="none"
+        ;;
 esac
 
 ##########################################
@@ -340,11 +390,11 @@ install_php() {
         dnf module reset php -y
         if ! dnf module enable php:remi-"${version_lc}" -y; then
             log_error "Failed to enable php:remi-${version_lc} module stream"
-            exit 1
+            exit 3
         fi
         if ! dnf module install php:remi-"${version_lc}" -y; then
             log_error "Failed to install php:remi-${version_lc} module group"
-            exit 1
+            exit 3
         fi
 
         # Refresh DNF metadata to ensure newly available packages are visible
@@ -387,11 +437,11 @@ check_compatibility() {
     echo "Performing compatibility checks..."
     if [[ "$DB_ENGINE" == "OracleXE" ]]; then
         log_error "Oracle XE installation is not supported automatically."
-        exit 1
+        exit 4
     fi
     if [[ "$CACHE_SETUP" == "Varnish" && "$WEB_SERVER" != "Nginx" ]]; then
         log_error "Varnish caching is only supported with Nginx in this installer."
-        exit 1
+        exit 4
     fi
     echo "All compatibility checks passed."
 }
@@ -422,7 +472,15 @@ if [[ "${MODE:-}" != "uninstall" ]]; then
             read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
             echo
             read -p "Enter domain name(s) (comma-separated): " DOMAINS
+            if [[ -z "$DOMAINS" ]]; then
+                log_error "No domains provided. Please enter at least one domain."
+                exit 1
+            fi
             IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
+            if [[ ${#DOMAIN_ARRAY[@]} -eq 0 ]]; then
+                log_error "No valid domains provided. Exiting."
+                exit 1
+            fi
             read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
             DOC_ROOT=${DOC_ROOT:-/var/www/html}
             # Set defaults for standard installation:
@@ -443,7 +501,15 @@ if [[ "${MODE:-}" != "uninstall" ]]; then
             read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
             echo
             read -p "Enter domain name(s) (comma-separated): " DOMAINS
+            if [[ -z "$DOMAINS" ]]; then
+                log_error "No domains provided. Please enter at least one domain."
+                exit 1
+            fi
             IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
+            if [[ ${#DOMAIN_ARRAY[@]} -eq 0 ]]; then
+                log_error "No valid domains provided. Exiting."
+                exit 1
+            fi
             read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
             DOC_ROOT=${DOC_ROOT:-/var/www/html}
             PHP_VERSION=$(best_php_version)
@@ -489,21 +555,21 @@ if [[ "${MODE:-}" != "uninstall" ]]; then
         fi
 
         # Updated Log File Location:
-		# If the script is run with sudo, use SUDO_USER's home directory rather than /root
-		if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-			USER_HOME=$(eval echo "~$SUDO_USER")
-		else
-			USER_HOME=$HOME
-		fi
+        # If the script is run with sudo, use SUDO_USER's home directory rather than /root
+        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+            USER_HOME=$(eval echo "~$SUDO_USER")
+        else
+            USER_HOME=$HOME
+        fi
 
-		if [[ -d "$USER_HOME/Desktop" ]]; then
-			LOGFILE="$USER_HOME/Desktop/installer.log"
-		else
-			LOGFILE="$USER_HOME/installer.log"
-		fi
+        if [[ -d "$USER_HOME/Desktop" ]]; then
+            LOGFILE="$USER_HOME/Desktop/installer.log"
+        else
+            LOGFILE="$USER_HOME/installer.log"
+        fi
 
-		echo "Installation started at $(date)" > "$LOGFILE"
-		exec > >(tee -a "$LOGFILE") 2>&1
+        echo "Installation started at $(date)" > "$LOGFILE"
+        exec > >(tee -a "$LOGFILE") 2>&1
 
     fi
 fi
@@ -515,7 +581,7 @@ fi
 install_database() {
     echo "Installing database engine: $DB_ENGINE"
     
-    # Ensure we switch to MariaDB if MySQL is unavailable on Rocky Linux
+    # Ensure we switch to MariaDB if MySQL is unavailable on certain distros
     if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
         echo "MySQL is not available by default on $PRETTY_NAME; switching to MariaDB."
         DB_ENGINE="MariaDB"
@@ -583,7 +649,6 @@ EOF
             ;;
     esac
 }
-
 
 install_ftp_sftp() {
     if [[ "${INSTALL_FTP:-false}" = true ]]; then
@@ -756,6 +821,8 @@ opcache.revalidate_freq=60
 opcache.fast_shutdown=1
 EOF
         fi
+    else
+        log_error "PHP configuration file not found at $PHP_INI."
     fi
     if [[ "$WEB_SERVER" == "Nginx" ]]; then
         sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
@@ -1043,7 +1110,7 @@ setup_firewall() {
             ufw allow 'Apache Full'
         fi
         ufw --force enable
-    else
+    elif [[ "$FIREWALL" == "firewalld" ]]; then
         systemctl start firewalld
         systemctl enable firewalld
         if [[ "$USE_HARDENED_SSH" == true ]]; then
@@ -1054,6 +1121,8 @@ setup_firewall() {
         firewall-cmd --permanent --add-service=http
         firewall-cmd --permanent --add-service=https
         firewall-cmd --reload
+    else
+        echo "Warning: No recognized firewall management found for ${DISTRO}. Skipping firewall configuration."
     fi
 }
 
