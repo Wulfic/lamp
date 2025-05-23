@@ -884,12 +884,12 @@ install_web_server() {
 
 setup_virtual_hosts() {
     echo "Setting up virtual hosts..."
-    if [[ "$WEB_SERVER" == "Nginx" || "$WEB_SERVER" == "Apache" ]]; then
+
+    if [[ "$WEB_SERVER" == "Nginx" ]]; then
         for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
             DOMAIN=$(echo "$DOMAIN" | xargs)
             mkdir -p "$DOC_ROOT/$DOMAIN"
-            if [[ "$WEB_SERVER" == "Nginx" ]]; then
-                cat <<EOF > /etc/nginx/sites-available/"$DOMAIN"
+            cat <<EOF > /etc/nginx/sites-available/"$DOMAIN"
 server {
     listen 80;
     server_name $DOMAIN;
@@ -907,9 +907,31 @@ server {
     }
 }
 EOF
-                sudo ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/
-            else
-                cat <<EOF > /etc/apache2/sites-available/"$DOMAIN".conf
+            sudo ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/
+        done
+        sudo systemctl reload nginx
+
+    elif [[ "$WEB_SERVER" == "Apache" ]]; then
+        # Set Apache-related variables based on distribution
+        if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
+            VHOST_DIR="/etc/apache2/sites-available"
+            ENABLE_SITE="sudo a2ensite"
+            DISABLE_DEFAULT="sudo a2dissite 000-default"
+            RELOAD_CMD="sudo systemctl reload apache2"
+            APACHE_LOG_DIR="/var/log/apache2"
+        else
+            # Assuming Rocky Linux, CentOS, AlmaLinux, etc.
+            VHOST_DIR="/etc/httpd/conf.d"
+            ENABLE_SITE=":"      # No enabling step is needed
+            DISABLE_DEFAULT=":"  # No default site to disable
+            RELOAD_CMD="sudo systemctl reload httpd"
+            APACHE_LOG_DIR="/var/log/httpd"
+        fi
+
+        for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
+            DOMAIN=$(echo "$DOMAIN" | xargs)
+            mkdir -p "$DOC_ROOT/$DOMAIN"
+            cat <<EOF > "$VHOST_DIR/$DOMAIN.conf"
 <VirtualHost *:80>
     ServerName $DOMAIN
     DocumentRoot $DOC_ROOT/$DOMAIN
@@ -917,28 +939,29 @@ EOF
         AllowOverride All
         Require all granted
     </Directory>
-    ErrorLog \${APACHE_LOG_DIR}/$DOMAIN-error.log
-    CustomLog \${APACHE_LOG_DIR}/$DOMAIN-access.log combined
+    ErrorLog ${APACHE_LOG_DIR}/$DOMAIN-error.log
+    CustomLog ${APACHE_LOG_DIR}/$DOMAIN-access.log combined
 </VirtualHost>
 EOF
-                sudo a2ensite "$DOMAIN".conf
-            fi
+            $ENABLE_SITE "$DOMAIN.conf"
         done
-        if [[ "$WEB_SERVER" == "Nginx" ]]; then
-            sudo systemctl reload nginx
-        else
-            sudo a2dissite 000-default
-            sudo systemctl reload apache2
-        fi
+
+        # Disable the default site if on a Debian‑based system
+        $DISABLE_DEFAULT
+
+        $RELOAD_CMD
+
         echo "Installing Certbot and obtaining SSL certificates..."
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
             CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
             pkg_install certbot "python3-certbot-${CERTBOT_PLUGIN}"
         else
             pkg_install certbot
         fi
+
         CERTBOT_PLUGIN=$(echo "$WEB_SERVER" | tr '[:upper:]' '[:lower:]')
         sudo certbot --${CERTBOT_PLUGIN} -d "${DOMAIN_ARRAY[@]}" --non-interactive --agree-tos -m "admin@$(echo "${DOMAIN_ARRAY[0]}" | xargs)" --redirect
+
     elif [[ "$WEB_SERVER" == "Caddy" ]]; then
         echo "Configuring Caddy using Caddyfile..."
         cat <<EOF > /etc/caddy/Caddyfile
@@ -955,6 +978,7 @@ $(for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
 done)
 EOF
         sudo systemctl reload caddy
+
     elif [[ "$WEB_SERVER" == "Lighttpd" ]]; then
         echo "Configuring Lighttpd..."
         for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
@@ -966,6 +990,7 @@ EOF
         sudo systemctl reload lighttpd
     fi
 }
+
 
 optimize_performance() {
     echo "Optimizing system performance..."
