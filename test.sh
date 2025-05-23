@@ -2,83 +2,43 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Global error trap
-trap 'echo "ERROR: An unexpected error occurred at line $LINENO: \"$BASH_COMMAND\""' ERR
+##############################
+# Global Settings & Traps
+##############################
+
+# Debugging & Verbose flags
+DEBUG=false
+VERBOSE=false
+if [[ "$DEBUG" == true ]]; then
+    set -x
+fi
+
+# Global log file variable (will be set later)
+LOGFILE=""
+
+# Global trap for unexpected errors and job interruption.
+trap 'echo "ERROR: An unexpected error occurred at line ${LINENO}: \"${BASH_COMMAND}\""' ERR
 trap 'echo -e "\n🔴 Script interrupted. Cleaning up..."; cleanup; exit 130' SIGINT SIGTERM
 
-DEBUG=false        # Set to true to enable debug mode
-VERBOSE=false      # Set to true for informational logging
-if [[ "$DEBUG" == true ]]; then
-  set -x
-fi
-
-# If DISTRO isn’t already set from the environment, attempt to detect it automatically.
-if [ -z "${DISTRO-}" ]; then
-    if [ -f /etc/os-release ]; then
-        # Source /etc/os-release to load variables like ID.
-        . /etc/os-release
-        # Normalize the distro ID to lowercase.
-        detected_distro=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
-    else
-        echo "Warning: /etc/os-release not found. Defaulting to 'ubuntu'." >&2
-        detected_distro="ubuntu"
-    fi
-else
-    # If DISTRO was predefined, normalize its value.
-    detected_distro=$(echo "$DISTRO" | tr '[:upper:]' '[:lower:]')
-fi
-
-# Validate that the detected distro is in the list of supported distributions.
-case "$detected_distro" in
-    ubuntu|debian|centos|rocky|almalinux|fedora|rhel)
-        DISTRO="$detected_distro"
-        ;;
-    *)
-        echo "Error: Unsupported Linux distribution: $detected_distro" >&2
-        exit 1
-        ;;
-esac
-
-echo "Running the script on: $DISTRO"
-
-##########################################
-# Default DOC_ROOT initialization        #
-##########################################
-DOC_ROOT=${DOC_ROOT:-/var/www/html}
-
-##########################################
-# Prepare DocumentRoot                     #
-##########################################
-prepare_docroot() {
-    echo "Preparing DocumentRoot directory at $DOC_ROOT..."
-    if [ ! -d "$DOC_ROOT" ]; then
-        echo "Creating $DOC_ROOT..."
-        sudo mkdir -p "$DOC_ROOT"
-    fi
-    # Determine the appropriate Apache user based on distro.
-    if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
-        owner="www-data"
-    else
-        owner="apache"
-    fi
-    sudo chown -R "$owner":"$owner" "$DOC_ROOT"
-    sudo chmod -R 755 "$DOC_ROOT"
-    # If SELinux is enforced, restore the proper security context.
-    if command -v restorecon >/dev/null 2>&1; then
-        sudo restorecon -Rv "$DOC_ROOT"
+# Cleanup function – remove temporary files, etc.
+cleanup() {
+    if [[ -f /tmp/kafka.tgz ]]; then
+        rm -f /tmp/kafka.tgz
+        log_info "Cleaned up temporary files."
     fi
 }
+trap cleanup EXIT
 
-##########################################
-# Logging Functions                      #
-##########################################
+##############################
+# Logging Functions
+##############################
 log_error() {
     local msg="$1"
     local func="${FUNCNAME[1]:-main}"
     local line="${BASH_LINENO[0]:-unknown}"
-    echo "ERROR in $func at line $line: $msg" >&2
+    echo "ERROR in ${func} at line ${line}: $msg" >&2
     if [[ -n "${LOGFILE:-}" ]]; then
-        echo "$(date +'%Y-%m-%d %T') ERROR in $func (line $line): $msg" >> "$LOGFILE"
+        echo "$(date +'%Y-%m-%d %T') ERROR in ${func} (line ${line}): $msg" >> "$LOGFILE"
     fi
 }
 
@@ -92,241 +52,147 @@ log_info() {
     fi
 }
 
-##########################################
-# Pre-execution Dependency Check         #
-##########################################
-check_dependencies() {
-    if [[ ${BASH_VERSINFO[0]} -lt 4 ]]; then
-        log_error "Bash version 4 or higher is required. Detected version: ${BASH_VERSINFO[0]}."
-        return 1
-    fi
+##############################
+# Helper Functions
+##############################
 
-    if ! ping -c 1 -W 2 google.com &>/dev/null; then
-        log_error "Network connectivity appears to be unavailable. Please check your connection."
-        return 1
-    fi
-
-    local pkg_manager=""
-    if command -v apt-get >/dev/null 2>&1; then
-        pkg_manager="apt-get"
-    elif command -v dnf >/dev/null 2>&1; then
-        pkg_manager="dnf"
-    elif command -v yum >/dev/null 2>&1; then
-        pkg_manager="yum"
-    fi
-
-    if [[ -z "$pkg_manager" ]]; then
-        log_error "No supported package manager found. Please install one of: apt-get, dnf, or yum."
-        return 1
-    fi
-
-    declare -A dependency_hints
-    dependency_hints["systemctl"]="systemctl (usually part of systemd)"
-    dependency_hints["wget"]="wget (e.g., sudo $pkg_manager install wget)"
-    dependency_hints["tar"]="tar (e.g., sudo $pkg_manager install tar)"
-    dependency_hints["ping"]="ping (often included in iputils-ping, e.g., sudo $pkg_manager install iputils-ping)"
-
-    local dependencies=("systemctl" "wget" "tar" "ping")
-
-    if [[ -n "${EXTRA_DEPS:-}" ]]; then
-        for dep in $EXTRA_DEPS; do
-            dependencies+=("$dep")
-        done
-    fi
-
-    local missing=()
-    for cmd in "${dependencies[@]}"; do
-        if ! command -v "$cmd" &>/dev/null; then
-            if [[ -n "${dependency_hints[$cmd]}" ]]; then
-                missing+=("$cmd (${dependency_hints[$cmd]})")
-            else
-                missing+=("$cmd")
-            fi
-        fi
-    done
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        log_error "The following essential commands are missing: ${missing[*]}"
-        if [[ "${AUTO_INSTALL_DEPS:-false}" == "true" ]]; then
-            log_info "Attempting to auto-install missing dependencies using $pkg_manager..."
-            local packages_to_install=()
-            for dep in "${missing[@]}"; do
-                packages_to_install+=( "$(echo "$dep" | cut -d' ' -f1)" )
-            done
-            case $pkg_manager in
-                apt-get)
-                    sudo apt-get update && sudo apt-get install -y "${packages_to_install[@]}"
-                    ;;
-                dnf)
-                    sudo dnf install -y "${packages_to_install[@]}"
-                    ;;
-                yum)
-                    sudo yum install -y "${packages_to_install[@]}"
-                    ;;
-            esac
-
-            local still_missing=()
-            for cmd in "${dependencies[@]}"; do
-                if ! command -v "$cmd" &>/dev/null; then
-                    still_missing+=("$cmd")
-                fi
-            done
-            if [ ${#still_missing[@]} -gt 0 ]; then
-                log_error "Auto-installation failed for the following commands: ${still_missing[*]}"
-                return 1
-            else
-                log_info "All missing dependencies were auto-installed successfully."
-            fi
-        else
-            log_error "Please install the missing dependencies and re-run the script."
-            return 1
-        fi
-    else
-        log_info "All required dependencies are available."
-    fi
-
-    return 0
-}
-
-# Cleanup function
-cleanup() {
-    if [[ -f /tmp/kafka.tgz ]]; then
-        rm -f /tmp/kafka.tgz
-        log_info "Cleaned up temporary files."
-    fi
-}
-trap cleanup EXIT
-
-##########################################
-# Helper Functions                       #
-##########################################
+# Detect Linux distribution using /etc/os-release
 detect_distro() {
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
         echo "${ID,,}"
     else
-        log_error "Cannot detect operating system. Exiting."
+        log_error "/etc/os-release not found. Defaulting to ubuntu."
+        echo "ubuntu"
+    fi
+}
+
+# Allow pre-setting DISTRO from the environment; otherwise, auto-detect.
+init_distro() {
+    local detected=""
+    if [[ -z "${DISTRO-}" ]]; then
+        detected=$(detect_distro)
+    else
+        detected=$(echo "${DISTRO}" | tr '[:upper:]' '[:lower:]')
+    fi
+
+    case "$detected" in
+        ubuntu|debian|centos|rocky|almalinux|fedora|rhel)
+            DISTRO="$detected"
+            ;;
+        *)
+            log_error "Unsupported Linux distribution detected: $detected"
+            exit 1
+            ;;
+    esac
+    echo "$DISTRO"
+}
+
+# Detect the package manager
+get_package_manager() {
+    if command -v apt-get >/dev/null 2>&1; then
+        echo "apt-get"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "dnf"
+    elif command -v yum >/dev/null 2>&1; then
+        echo "yum"
+    else
+        log_error "No supported package manager found."
         exit 1
     fi
 }
 
-# Function to (re)enable EPEL and related repos (modularized for ease of editing)
-enable_epel_and_powertools() {
-    if command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y epel-release || true
-        if grep -q "Rocky Linux 9" /etc/os-release; then
-            log_info "Enabling CodeReady Builder (CRB) repository for Rocky Linux 9..."
-            sudo dnf config-manager --set-enabled crb || true
-        else
-            log_info "Enabling PowerTools repository..."
-            sudo dnf config-manager --set-enabled powertools || true
-        fi
+# Helper to identify Debian-based distros.
+is_debian() {
+    [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]
+}
+
+# Helper to identify RPM-based distros.
+is_rpm() {
+    [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux|fedora)$ ]]
+}
+
+# Prepare DocumentRoot directory and set proper ownership/permissions.
+prepare_docroot() {
+    local doc_root="${DOC_ROOT:-/var/www/html}"
+    log_info "Preparing DocumentRoot at ${doc_root}..."
+    if [[ ! -d "$doc_root" ]]; then
+        log_info "Creating directory: $doc_root"
+        sudo mkdir -p "$doc_root"
+    fi
+    local owner=""
+    if is_debian; then
+        owner="www-data"
     else
-        sudo yum install -y epel-release || true
-        sudo yum-config-manager --enable epel || true
+        owner="apache"
+    fi
+    sudo chown -R "$owner":"$owner" "$doc_root"
+    sudo chmod -R 755 "$doc_root"
+    if command -v restorecon >/dev/null 2>&1; then
+        sudo restorecon -Rv "$doc_root"
     fi
 }
 
-install_with_retry() {
-    local cmd=("$@")
-    retry_command "${cmd[@]}"
-}
+##############################
+# Package Management Functions
+##############################
 
-retry_command() {
-  local retries=3 delay=5 attempt=0
-  until "$@" || [[ $attempt -ge $retries ]]; do
-    ((attempt++))
-    echo "⚠️  Attempt $attempt failed: $*. Retrying in $delay seconds..."
-    sleep "$delay"
-  done
-  if [[ $attempt -ge $retries ]]; then
-    log_error "Command failed after $retries attempts: $*"
-    return 1
-  fi
-}
-
-##########################################
-# Package installation with repo support #
-##########################################
 pkg_install() {
-  local pkgs=("$@")
-  log_info "Installing packages: ${pkgs[*]} on distro: $DISTRO"
-  case "$DISTRO" in
-    ubuntu|debian)
-      if ! install_with_retry sudo apt-get install -y "${pkgs[@]}"; then
-        echo "⚠️  Installation failed on ${DISTRO}. Attempting to add missing repositories..."
-        sudo apt-get install -y software-properties-common curl gnupg lsb-release ca-certificates
-        for pkg in "${pkgs[@]}"; do
-          case $pkg in
-            php8.*)
-              sudo add-apt-repository ppa:ondrej/php -y
-              ;;
-            nginx)
-              sudo add-apt-repository ppa:nginx/stable -y
-              ;;
-          esac
-        done
-        sudo apt-get update
-        install_with_retry sudo apt-get install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-      fi
-      ;;
-    centos|rhel|rocky|almalinux)
-      if ! install_with_retry sudo dnf install -y "${pkgs[@]}"; then
-        echo "⚠️  Installation failed on ${DISTRO}. Attempting to enable required repositories..."
-        sudo dnf install -y epel-release || log_error "❌ Could not install epel-release"
-        if [[ "$DISTRO" == "centos" || "$DISTRO" == "rhel" ]]; then
-          sudo dnf config-manager --set-enabled powertools || log_error "❌ Could not enable powertools repository"
-        fi
-        if [[ "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" || "$DISTRO" == "rhel" ]]; then
-          sudo dnf config-manager --set-enabled crb || log_error "❌ Could not enable CRB repository"
-        fi
-        install_with_retry sudo dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-      fi
-      ;;
-    fedora)
-      if ! install_with_retry sudo dnf install -y "${pkgs[@]}"; then
-        echo "⚠️  Installation failed on Fedora. Refreshing metadata and retrying..."
-        sudo dnf makecache || log_error "❌ Could not update package cache on Fedora"
-        install_with_retry sudo dnf install -y "${pkgs[@]}" || log_error "❌ Could not install ${pkgs[*]}"
-      fi
-      ;;
-    *)
-      log_error "Warning: Unsupported distribution: ${DISTRO}. Attempting to use available package manager for installation."
-      if command -v apt-get >/dev/null 2>&1; then
-          install_with_retry sudo apt-get install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with apt-get on ${DISTRO}"
-      elif command -v dnf >/dev/null 2>&1; then
-          install_with_retry sudo dnf install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with dnf on ${DISTRO}"
-      elif command -v yum >/dev/null 2>&1; then
-          install_with_retry sudo yum install -y "${pkgs[@]}" || log_error "❌ Failed to install ${pkgs[*]} with yum on ${DISTRO}"
-      else
-          log_error "❌ No known package manager found on ${DISTRO}."
-      fi
-      ;;
-  esac
+    local pkgs=("$@")
+    log_info "Installing packages: ${pkgs[*]} on distro: ${DISTRO}"
+    local pkg_manager
+    pkg_manager=$(get_package_manager)
+
+    case "$DISTRO" in
+        ubuntu|debian)
+            if ! sudo apt-get install -y "${pkgs[@]}"; then
+                log_error "Installation failed for packages: ${pkgs[*]} via apt-get."
+                exit 2
+            fi
+            ;;
+        centos|rhel|rocky|almalinux)
+            if ! sudo dnf install -y "${pkgs[@]}"; then
+                log_error "Installation failed for packages: ${pkgs[*]} via dnf."
+                exit 2
+            fi
+            ;;
+        fedora)
+            if ! sudo dnf install -y "${pkgs[@]}"; then
+                log_error "Installation failed for packages: ${pkgs[*]} via dnf on Fedora."
+                exit 2
+            fi
+            ;;
+        *)
+            log_error "Using fallback installation method on unknown distro: ${DISTRO}"
+            if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get install -y "${pkgs[@]}"
+            elif command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y "${pkgs[@]}"
+            elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y "${pkgs[@]}"
+            else
+                log_error "Failed to install packages: ${pkgs[*]}. No known package manager available."
+                exit 2
+            fi
+            ;;
+    esac
 }
 
-##########################################
-# Miscellaneous Package Management       #
-##########################################
 pkg_update() {
     log_info "Updating system on $DISTRO..."
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        if command -v apt-fast >/dev/null 2>&1; then
-            sudo apt-fast update && sudo apt-fast upgrade -y || { log_error "apt-fast update failed."; exit 2; }
-        else
-            sudo apt-get update && sudo apt-get upgrade -y || { log_error "apt-get update/upgrade failed."; exit 2; }
-        fi
+    if is_debian; then
+        sudo apt-get update && sudo apt-get upgrade -y || { log_error "Update/upgrade failed on Debian-based system."; exit 2; }
     else
         if command -v dnf >/dev/null 2>&1; then
-            sudo dnf update -y || { log_error "dnf update failed."; exit 2; }
+            sudo dnf update -y || { log_error "Update failed on $DISTRO."; exit 2; }
         else
-            sudo yum update -y || { log_error "yum update failed."; exit 2; }
+            sudo yum update -y || { log_error "Update failed on $DISTRO."; exit 2; }
         fi
     fi
 }
 
 pkg_remove() {
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+    if is_debian; then
         sudo apt-get purge -y "$@"
     else
         if command -v dnf >/dev/null 2>&1; then
@@ -339,148 +205,74 @@ pkg_remove() {
 
 remove_if_installed() {
     local pkg="$1"
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+    if is_debian; then
         if dpkg -s "$pkg" >/dev/null 2>&1; then
-            echo "Removing package: $pkg"
-            pkg_remove "$pkg" || echo "Warning: Failed to remove package $pkg"
+            log_info "Removing package: $pkg"
+            pkg_remove "$pkg"
         else
-            echo "Package $pkg is not installed, skipping: $pkg"
+            log_info "Package $pkg not installed, skipping."
         fi
     else
         if rpm -q "$pkg" >/dev/null 2>&1; then
-            echo "Removing package: $pkg"
-            pkg_remove "$pkg" || echo "Warning: Failed to remove package $pkg"
+            log_info "Removing package: $pkg"
+            pkg_remove "$pkg"
         else
-            echo "Package $pkg is not installed, skipping: $pkg"
+            log_info "Package $pkg not installed, skipping."
         fi
     fi
 }
 
-##########################################
-# Distro‑Specific Package Mappings       #
-##########################################
-if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
-    APACHE_PACKAGE="apache2"
-    APACHE_UTILS="apache2-utils"
-    REDIS_PACKAGE="redis-server"
-    JAVA_PACKAGE="openjdk-11-jdk"
-elif [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux|fedora)$ ]]; then
-    APACHE_PACKAGE="httpd"
-    APACHE_UTILS=""
-    REDIS_PACKAGE="redis"
-    JAVA_PACKAGE="java-11-openjdk-devel"
-else
-    APACHE_PACKAGE="apache2"
-    APACHE_UTILS="apache2-utils"
-    REDIS_PACKAGE="redis-server"
-    JAVA_PACKAGE="openjdk-11-jdk"
-fi
+##############################
+# Additional Functional Modules
+##############################
 
-log_info "Distro-specific package configuration: Apache: ${APACHE_PACKAGE} ${APACHE_UTILS}, Redis: ${REDIS_PACKAGE}, Java: ${JAVA_PACKAGE}"
+# Enable EPEL and related repos for RPM-based systems
+enable_epel_and_powertools() {
+    if command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y epel-release || true
+        if grep -q "Rocky Linux 9" /etc/os-release; then
+            log_info "Enabling CodeReady Builder (CRB) repository for Rocky Linux 9..."
+            sudo dnf config-manager --set-enabled crb || true
+        else
+            log_info "Enabling PowerTools repository..."
+            sudo dnf config-manager --set-enabled powertools || true
+        fi
+    elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y epel-release || true
+        sudo yum-config-manager --enable epel || true
+    fi
+}
 
-##########################################
-# PHP Module Definitions                 #
-##########################################
-declare -A PHP_MODULES=(
-  [core]="php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip"
-  [sqlite]="php-sqlite3 sqlite"
-)
-
-##########################################
-# ASCII Art and Banner                   #
-##########################################
-RED='\033[0;31m'
-NC='\033[0m'  # Reset color
-ART=(
-"   _        _______  _______  _______    ______                                _        _______ _________ _______   "
-"  ( \      (  ___  )(       )(  ____ )  (  ___ \ |\     /|  |\     /||\     /|( \      ( ____ \\__   __/(  ____ \  "  
-"  | (      | (   ) || () () || (    )|  | (   ) )( \   / )  | )   ( || )   ( || (      | (    \/   ) (   | (    \/  "
-"  | |      | (___) || || || || (____)|  | (__/ /  \ (_) /   | | _ | || |   | || |      | (__       | |   | |        "
-"  | |      |  ___  || |(_)| ||  _____)  |  __ (    \   /    | |( )| || |   | || |      |  __)      | |   | |        "
-"  | |      | (   ) || |   | || (        | (  \ \    ) (     | || || || |   | || |      | (         | |   | |        "
-"  | (____/\| )   ( || )   ( || )        | )___) )   | |     | () () || (___) || (____/\| )      ___) (___| (____/\  "
-"  (_______/|/     \||/     \||/         |/ \___/    \_/     (_______)(_______)(_______/|/       \_______/(_______/  "
-"###########################################################################################################"
-"#################################### Lamp by Wulfic #####################################################"
-"01001100 01100001 01101101 01110000  01100010 01111001  01010111 01110101 01101100 01100110 01101001 01100011 "
-)
-for line in "${ART[@]}"; do
-    printf "${RED}%s\n" "$line"
-done
-printf "${NC}\n"  # Reset color
-
-echo "##########################################################################"
-echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
-echo "# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, Fedora, and RHEL"
-echo "#"
-echo "# This script installs a flexible stack with options for:"
-echo "# • Multiple database engines: MySQL, MariaDB, PostgreSQL, SQLite, Percona, MongoDB, OracleXE"
-echo "# • Multiple web servers: Apache (or httpd on RPM‑based systems), Nginx, Caddy, Lighttpd"
-echo "# • Extended caching: Redis (or redis on RPM‑based systems), Memcached, Varnish"
-echo "# • Messaging queues: RabbitMQ, Kafka"
-echo "# • Containerization & automation support: Docker Compose file generation, Ansible playbook export"
-echo "# • SSH Setup Options: Standard SSH or Hardened SSH (Protocol 2, key‑only auth, custom ciphers, etc.)"
-echo "#"
-echo "# IMPORTANT:"
-echo "#   - OracleXE is not supported automatically."
-echo "#   - Varnish caching is only allowed with Nginx."
-echo "#   - A log file (\"installer.log\") is created on your Desktop or home directory."
-echo "#"
-echo "# Note: This version includes distro‑specific adjustments and logging for easier debugging."
-echo "##########################################################################"
-
-##########################################
-# Detect distribution and set constants  #
-##########################################
-DISTRO=$(detect_distro)
-log_info "Detected distribution: $DISTRO"
-case $DISTRO in
-    ubuntu|debian)
-        FIREWALL="ufw" ;;
-    centos|rhel|rocky|almalinux|fedora)
-        FIREWALL="firewalld" ;;
-    *)
-        log_error "Warning: Unsupported distro detected: ${DISTRO}. Installation may fail on this system."
-        FIREWALL="none"
-        ;;
-esac
-
-##########################################
-# Enable Additional Repositories         #
-##########################################
-enable_epel_and_powertools
-
-##########################################
-# Determine the Best PHP Version         #
-##########################################
+# Return best PHP version available for the distro.
 best_php_version() {
+    local version=""
     case "$DISTRO" in
         ubuntu|debian)
             for ver in 8.2 8.1 8.0; do
-                if apt-cache show php${ver} >/dev/null 2>&1; then
-                    echo "$ver"
-                    return
+                if apt-cache show php"${ver}" >/dev/null 2>&1; then
+                    version="$ver"
+                    break
                 fi
             done
-            echo "7.4"
+            echo "${version:-7.4}"
             ;;
         fedora)
             for ver in 8.2 8.1 8.0; do
                 if dnf info php | grep -E -q "Version\s*:\s*${ver}\b"; then
-                    echo "$ver"
-                    return
+                    version="$ver"
+                    break
                 fi
             done
-            echo "8.2"
+            echo "${version:-8.2}"
             ;;
         centos|rocky|almalinux|rhel)
             for ver in 8.2 8.1 8.0; do
-                if dnf module info php:remi-${ver} &>/dev/null; then
-                    echo "$ver"
-                    return
+                if dnf module info php:remi-"${ver}" &>/dev/null; then
+                    version="$ver"
+                    break
                 fi
             done
-            echo "7.4"
+            echo "${version:-7.4}"
             ;;
         *)
             echo "8.2"
@@ -488,320 +280,140 @@ best_php_version() {
     esac
 }
 
-##########################################
-# PHP Installation Function              #
-##########################################
+# PHP Installation
 install_php() {
     if command -v php >/dev/null 2>&1; then
-        echo "PHP is already installed at $(command -v php): $(php -v | head -n 1)"
+        log_info "PHP already installed at $(command -v php): $(php -v | head -n 1)"
         return 0
     fi
-
-    local version_lc="${PHP_VERSION,,}"
-    echo "Installing PHP ${version_lc} and necessary modules..."
-    
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysql" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
-        if [[ "$DB_ENGINE" == "SQLite" ]]; then
-            pkg_install "${PHP_MODULES[sqlite]}"
+    PHP_VERSION=$(best_php_version)
+    log_info "Installing PHP ${PHP_VERSION} and required modules..."
+    if is_debian; then
+        pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysql" \
+                    "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" \
+                    "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
+        if [[ "${DB_ENGINE:-MariaDB}" == "SQLite" ]]; then
+            pkg_install php-sqlite3 sqlite
         fi
     else
-        if [[ "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" || "$DISTRO" == "rhel" ]]; then
-            local rel
+        # For RPM-based distros, ensure remi repositories are enabled.
+        local rel=""
+        if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
             rel=$(rpm -E %{rhel})
             REMI_RPM="https://rpms.remirepo.net/enterprise/remi-release-${rel}.rpm"
         elif [[ "$DISTRO" == "fedora" ]]; then
-            local rel
             rel=$(rpm -E %{fedora})
             REMI_RPM="https://rpms.remirepo.net/fedora/remi-release-${rel}.rpm"
         else
             REMI_RPM="https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
         fi
-        
         if ! rpm -q remi-release >/dev/null 2>&1; then
             pkg_install "$REMI_RPM"
         fi
 
         sudo dnf module reset php -y
-        if ! sudo dnf module enable php:remi-"${version_lc}" -y; then
-            log_error "Failed to enable php:remi-${version_lc} module stream"
+        if ! sudo dnf module enable php:remi-"${PHP_VERSION}" -y; then
+            log_error "Failed to enable php:remi-${PHP_VERSION} module stream"
             exit 3
         fi
-        if ! sudo dnf module install php:remi-"${version_lc}" -y; then
-            log_error "Failed to install php:remi-${version_lc} module group"
+        if ! sudo dnf module install php:remi-"${PHP_VERSION}" -y; then
+            log_error "Failed to install php:remi-${PHP_VERSION} module group"
             exit 3
         fi
 
         sudo dnf clean all && sudo dnf makecache
-        pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysqlnd" "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
-        if [[ "$DB_ENGINE" == "SQLite" ]]; then
-            pkg_install "${PHP_MODULES[sqlite]}"
+        pkg_install "php${PHP_VERSION}" "php${PHP_VERSION}-cli" "php${PHP_VERSION}-mysqlnd" \
+                    "php${PHP_VERSION}-gd" "php${PHP_VERSION}-curl" "php${PHP_VERSION}-mbstring" \
+                    "php${PHP_VERSION}-xml" "php${PHP_VERSION}-zip"
+        if [[ "${DB_ENGINE:-MariaDB}" == "SQLite" ]]; then
+            pkg_install php-sqlite3 sqlite
         fi
     fi
 }
 
-##########################################
-# Package & System Update Functions      #
-##########################################
-update_system() {
-    pkg_update
-}
-
-install_prerequisites() {
-    update_system
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-        pkg_install software-properties-common openssh-server ufw fail2ban
-    else
-        pkg_install openssh-server firewalld fail2ban
-        if ! rpm -q epel-release >/dev/null 2>&1; then
-            pkg_install epel-release
-        fi
-    fi
-    if [[ "${INSTALL_UTILS:-false}" = true ]]; then
-        pkg_install git curl htop zip unzip
-    fi
-}
-
-##########################################
-# Compatibility Check Function           #
-##########################################
-check_compatibility() {
-    echo "Performing compatibility checks..."
-    if [[ "$DB_ENGINE" == "OracleXE" ]]; then
-        log_error "Oracle XE installation is not supported automatically."
-        exit 4
-    fi
-    if [[ "$CACHE_SETUP" == "Varnish" && "$WEB_SERVER" != "Nginx" ]]; then
-        log_error "Varnish caching is only supported with Nginx in this installer."
-        exit 4
-    fi
-    echo "All compatibility checks passed."
-}
-
-##########################################
-# User Input Prompts (Installation Mode) #
-##########################################
-if [[ "${MODE:-}" != "uninstall" ]]; then
-    echo "Choose an operation:"
-    select ACTION in "Install" "Upgrade" "Uninstall"; do
-        case $ACTION in
-            Install ) MODE="install"; break;;
-            Upgrade ) MODE="upgrade"; break;;
-            Uninstall ) MODE="uninstall"; break;;
-        esac
-    done
-
-    if [[ "$MODE" != "uninstall" ]]; then
-        echo "Select installation type:"
-        select INSTALL_TYPE in "Standard LAMP" "Advanced Installation"; do
-            case $INSTALL_TYPE in
-                "Standard LAMP") INSTALL_TYPE="standard"; break;;
-                "Advanced Installation") INSTALL_TYPE="advanced"; break;;
-            esac
-        done
-
-        if [[ "$INSTALL_TYPE" == "standard" ]]; then
-            read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
-            echo
-            read -p "Enter domain name(s) (comma-separated): " DOMAINS
-            if [[ -z "$DOMAINS" ]]; then
-                log_error "No domains provided. Please enter at least one domain."
-                exit 1
-            fi
-            IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
-            if [[ ${#DOMAIN_ARRAY[@]} -eq 0 ]]; then
-                log_error "No valid domains provided. Exiting."
-                exit 1
-            fi
-            read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
-            DOC_ROOT=${DOC_ROOT:-/var/www/html}
-            DB_ENGINE="MariaDB"
-            WEB_SERVER="Apache"
-            PHP_VERSION=$(best_php_version)
-            INSTALL_UTILS=false
-            INSTALL_FTP=false
-            CACHE_SETUP="None"
-            MSG_QUEUE="None"
-            SSH_DEPLOY=false
-            USE_HARDENED_SSH=false
-            GENERATE_DOCKER=false
-            GENERATE_ANSIBLE=false
-            echo "Standard LAMP installation selected: Apache, MariaDB, PHP, and phpMyAdmin."
-        else
-            read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
-            echo
-            read -p "Enter domain name(s) (comma-separated): " DOMAINS
-            if [[ -z "$DOMAINS" ]]; then
-                log_error "No domains provided. Please enter at least one domain."
-                exit 1
-            fi
-            IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
-            if [[ ${#DOMAIN_ARRAY[@]} -eq 0 ]]; then
-                log_error "No valid domains provided. Exiting."
-                exit 1
-            fi
-            read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
-            DOC_ROOT=${DOC_ROOT:-/var/www/html}
-            PHP_VERSION=$(best_php_version)
-            echo "Auto-selected best PHP version: $PHP_VERSION"
-            echo "Select database engine:"
-            select DB_ENGINE in "MySQL" "MariaDB" "PostgreSQL" "SQLite" "Percona" "MongoDB" "OracleXE"; do break; done
-            echo "Install optional tools (git, curl, htop, zip, etc.)?"
-            select UTIL_TOOLS in "Yes" "No"; do
-                [[ "$UTIL_TOOLS" == "Yes" ]] && INSTALL_UTILS=true || INSTALL_UTILS=false; break
-            done
-            echo "Install FTP/SFTP server?"
-            select FTP_SETUP in "Yes" "No"; do
-                [[ "$FTP_SETUP" == "Yes" ]] && INSTALL_FTP=true || INSTALL_FTP=false; break
-            done
-            echo "Enable caching (Redis/Memcached/Varnish)?"
-            select CACHE_SETUP in "Redis" "Memcached" "Varnish" "None"; do break; done
-            echo "Select messaging queue engine:"
-            select MSG_QUEUE in "RabbitMQ" "Kafka" "None"; do break; done
-            echo "Select web server:"
-            select WEB_SERVER in "Nginx" "Apache" "Caddy" "Lighttpd"; do break; done
-            echo "Setup SSH deployment user?"
-            select SSH_DEPLOY in "Yes" "No"; do
-                [[ "$SSH_DEPLOY" == "Yes" ]] && SETUP_SSH_DEPLOY=true || SETUP_SSH_DEPLOY=false; break
-            done
-            echo "Restrict SSH logins to specific users? (Optional)"
-            read -p "Enter allowed SSH usernames (space‑separated, leave empty to allow all): " SSH_ALLOWED_USERS
-            echo "Select SSH configuration type:"
-            select SSH_CONFIG_OPTION in "Standard SSH" "Hardened SSH"; do
-                case $SSH_CONFIG_OPTION in
-                    "Standard SSH" ) USE_HARDENED_SSH=false; break;;
-                    "Hardened SSH" ) USE_HARDENED_SSH=true; break;;
-                esac
-            done
-            echo "Generate Docker Compose file for containerized deployment?"
-            select DOCKER_OPTION in "Yes" "No"; do
-                [[ "$DOCKER_OPTION" == "Yes" ]] && GENERATE_DOCKER=true || GENERATE_DOCKER=false; break
-            done
-            echo "Generate Ansible playbook for automation?"
-            select ANSIBLE_OPTION in "Yes" "No"; do
-                [[ "$ANSIBLE_OPTION" == "Yes" ]] && GENERATE_ANSIBLE=true || GENERATE_ANSIBLE=false; break
-            done
-            check_compatibility
-        fi
-
-        if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-            USER_HOME=$(eval echo "~$SUDO_USER")
-        else
-            USER_HOME=$HOME
-        fi
-
-        if [[ -d "$USER_HOME/Desktop" ]]; then
-            LOGFILE="$USER_HOME/Desktop/installer.log"
-        else
-            LOGFILE="$USER_HOME/installer.log"
-        fi
-
-        echo "Installation started at $(date)" > "$LOGFILE"
-        exec > >(tee -a "$LOGFILE") 2>&1
-
-    fi
-fi
-
-################################
-# Installation Functions       #
-################################
-
+# Database installation and initial configuration
 install_database() {
-    echo "Installing database engine: $DB_ENGINE"
-    
-    if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
-        echo "MySQL is not available by default on this distribution; switching to MariaDB."
+    log_info "Installing database engine: ${DB_ENGINE}"
+    if [[ "${DB_ENGINE}" == "MySQL" && ( "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ) ]]; then
+        log_info "MySQL not available by default on $DISTRO; switching to MariaDB."
         DB_ENGINE="MariaDB"
     fi
-    
-    case $DB_ENGINE in
+    case "${DB_ENGINE}" in
         "MariaDB")
             pkg_install mariadb-server
             sudo systemctl enable --now mariadb
-
-            echo "Applying secure MariaDB configuration..."
+            log_info "Configuring MariaDB..."
             if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
-                echo "Detected $DISTRO: Forcing unix_socket authentication update without using a current password."
                 sudo mysql <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
             else
-                AUTH_PLUGIN=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
-                if [[ "$AUTH_PLUGIN" == "unix_socket" ]]; then
-                    echo "Unix socket authentication detected; updating root password using socket auth."
+                local auth_plugin
+                auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+                if [[ "$auth_plugin" == "unix_socket" ]]; then
                     sudo mysql <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
                 else
-                    echo "Authentication plugin is not unix_socket; updating root password using native password plugin."
                     if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
                         read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
                         echo
                     fi
                     if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
-                        sudo mysql -uroot -p"$CURRENT_ROOT_PASSWORD" <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD';
+                        sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
                     else
                         sudo mysql -uroot <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD';
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
                     fi
                 fi
             fi
             ;;
-        
         "MySQL")
             pkg_install mysql-server
             sudo systemctl enable --now mysql
-
-            echo "Applying secure MySQL configuration..."
-            mysql -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+            sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
             ;;
-        
         "PostgreSQL")
             pkg_install postgresql postgresql-contrib
-            sudo -u postgres psql -c "ALTER USER postgres PASSWORD '$DB_PASSWORD';"
+            sudo -u postgres psql -c "ALTER USER postgres PASSWORD '${DB_PASSWORD}';"
             ;;
-        
         "SQLite")
-            echo "SQLite is already installed with PHP support."
+            log_info "SQLite is file‑based and already comes with PHP support."
             ;;
-        
         "Percona")
             pkg_install percona-server-server
             sudo systemctl enable --now mysql
-
-            echo "Applying secure Percona configuration..."
-            mysql -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+            sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
             ;;
-        
         "MongoDB")
-            if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            if is_debian; then
                 wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
                 echo "deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
-                update_system
+                pkg_update
                 pkg_install mongodb-org
                 sudo systemctl enable --now mongod
-            elif [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux|fedora)$ ]]; then
+            elif is_rpm; then
                 cat <<EOF | sudo tee /etc/yum.repos.d/mongodb-org-6.0.repo
 [mongodb-org-6.0]
 name=MongoDB Repository
@@ -810,33 +422,34 @@ gpgcheck=1
 enabled=1
 gpgkey=https://www.mongodb.org/static/pgp/server-6.0.asc
 EOF
-                update_system
+                pkg_update
                 pkg_install mongodb-org
                 sudo systemctl enable --now mongod
             else
-                log_error "MongoDB repository setup not configured for distro: $DISTRO"
+                log_error "MongoDB setup not configured for distro: ${DISTRO}"
             fi
             ;;
-        
         "OracleXE")
-            echo "Oracle XE installation requires manual steps. Please refer to Oracle documentation."
+            log_error "Oracle XE installation requires manual steps. Please refer to Oracle documentation."
             ;;
     esac
 }
 
+# Stub function: Setup optional FTP/SFTP server.
 install_ftp_sftp() {
-    if [[ "${INSTALL_FTP:-false}" = true ]]; then
+    if [[ "${INSTALL_FTP:-false}" == true ]]; then
         pkg_install vsftpd
     fi
 }
 
+# Install caching system based on user choice.
 install_cache() {
-    case $CACHE_SETUP in
+    case "${CACHE_SETUP}" in
         "Redis")
-            if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            if is_debian; then
                 pkg_install redis-server
             else
-                pkg_install "$REDIS_PACKAGE"
+                pkg_install redis
             fi
             ;;
         "Memcached")
@@ -846,76 +459,78 @@ install_cache() {
             pkg_install varnish
             ;;
         "None")
-            echo "No caching system selected."
+            log_info "No caching system selected."
             ;;
     esac
 }
 
+# Install messaging queue based on user choice.
 install_messaging_queue() {
-    case $MSG_QUEUE in
+    case "${MSG_QUEUE}" in
         "RabbitMQ")
             pkg_install rabbitmq-server
             ;;
         "Kafka")
-            if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            if is_debian; then
                 pkg_install openjdk-11-jdk
             else
                 pkg_install "$JAVA_PACKAGE"
             fi
-            KAFKA_VERSION="2.8.1"
-            KAFKA_SCALA="2.13"
-            wget "https://downloads.apache.org/kafka/2.8.1/kafka_${KAFKA_SCALA}-${KAFKA_VERSION}.tgz" -O /tmp/kafka.tgz
+            local KAFKA_VERSION="2.8.1"
+            local KAFKA_SCALA="2.13"
+            wget "https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_${KAFKA_SCALA}-${KAFKA_VERSION}.tgz" -O /tmp/kafka.tgz
             tar -xzf /tmp/kafka.tgz -C /opt
             sudo mv /opt/kafka_${KAFKA_SCALA}-${KAFKA_VERSION} /opt/kafka
             ;;
         "None")
-            echo "No messaging queue selected."
+            log_info "No messaging queue selected."
             ;;
     esac
 }
 
+# Install web server based on the user’s selection.
 install_web_server() {
-      case $WEB_SERVER in
+    case "${WEB_SERVER}" in
         "Nginx")
-              pkg_install nginx
-              ;;
+            pkg_install nginx
+            ;;
         "Apache")
-              if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-                  pkg_install apache2 apache2-utils
-              else
-                  pkg_install "$APACHE_PACKAGE"
-                  sudo systemctl enable --now "$APACHE_PACKAGE"
-              fi
-              ;;
+            if is_debian; then
+                pkg_install apache2 apache2-utils
+            else
+                pkg_install "$APACHE_PACKAGE"
+                sudo systemctl enable --now "$APACHE_PACKAGE"
+            fi
+            ;;
         "Caddy")
-              if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-                  pkg_install debian-keyring debian-archive-keyring apt-transport-https
-                  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
-                  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-                  update_system
-                  pkg_install caddy
-              else
-                  echo "Caddy installation on this distribution may require manual intervention."
-              fi
-              ;;
+            if is_debian; then
+                pkg_install debian-keyring debian-archive-keyring apt-transport-https
+                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
+                curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+                pkg_update
+                pkg_install caddy
+            else
+                log_info "Caddy installation on $DISTRO may require manual intervention."
+            fi
+            ;;
         "Lighttpd")
-              pkg_install lighttpd
-              ;;
-        esac
+            pkg_install lighttpd
+            ;;
+    esac
 }
 
+# Set up virtual hosts or server configuration based on web server
 setup_virtual_hosts() {
-    echo "Setting up virtual hosts..."
-
-    if [[ "$WEB_SERVER" == "Nginx" ]]; then
+    log_info "Setting up virtual hosts..."
+    if [[ "${WEB_SERVER}" == "Nginx" ]]; then
         for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
             DOMAIN=$(echo "$DOMAIN" | xargs)
-            mkdir -p "$DOC_ROOT/$DOMAIN"
-            cat <<EOF > /etc/nginx/sites-available/"$DOMAIN"
+            mkdir -p "${DOC_ROOT}/${DOMAIN}"
+            cat <<EOF | sudo tee /etc/nginx/sites-available/"${DOMAIN}"
 server {
     listen 80;
-    server_name $DOMAIN;
-    root $DOC_ROOT/$DOMAIN;
+    server_name ${DOMAIN};
+    root ${DOC_ROOT}/${DOMAIN};
     index index.php index.html index.htm;
     location / {
         try_files \$uri \$uri/ =404;
@@ -929,85 +544,59 @@ server {
     }
 }
 EOF
-            sudo ln -sf /etc/nginx/sites-available/"$DOMAIN" /etc/nginx/sites-enabled/
+            sudo ln -sf /etc/nginx/sites-available/"${DOMAIN}" /etc/nginx/sites-enabled/
         done
         sudo systemctl reload nginx
-
-    elif [[ "$WEB_SERVER" == "Apache" ]]; then
-        if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
+    elif [[ "${WEB_SERVER}" == "Apache" ]]; then
+        local VHOST_DIR="" APACHE_LOG_DIR="" RELOAD_CMD="" DISABLE_DEFAULT=""
+        if is_debian; then
             VHOST_DIR="/etc/apache2/sites-available"
-            ENABLE_SITE=(sudo a2ensite)
-            DISABLE_DEFAULT=(sudo a2dissite "000-default")
-            RELOAD_CMD=(sudo systemctl reload apache2)
+            RELOAD_CMD="sudo systemctl reload apache2"
+            DISABLE_DEFAULT="sudo a2dissite 000-default"
             APACHE_LOG_DIR="/var/log/apache2"
         else
             VHOST_DIR="/etc/httpd/conf.d"
-            ENABLE_SITE=(":")
-            DISABLE_DEFAULT=(":")
-            RELOAD_CMD=(sudo systemctl reload httpd)
+            RELOAD_CMD="sudo systemctl reload httpd"
             APACHE_LOG_DIR="/var/log/httpd"
         fi
-
         for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
             DOMAIN=$(echo "$DOMAIN" | xargs)
-            mkdir -p "$DOC_ROOT/$DOMAIN"
-            cat <<EOF > "$VHOST_DIR/$DOMAIN.conf"
+            mkdir -p "${DOC_ROOT}/${DOMAIN}"
+            cat <<EOF | sudo tee "${VHOST_DIR}/${DOMAIN}.conf"
 <VirtualHost *:80>
-    ServerName $DOMAIN
-    DocumentRoot $DOC_ROOT/$DOMAIN
-    <Directory $DOC_ROOT/$DOMAIN>
+    ServerName ${DOMAIN}
+    DocumentRoot ${DOC_ROOT}/${DOMAIN}
+    <Directory ${DOC_ROOT}/${DOMAIN}>
         AllowOverride All
         Require all granted
     </Directory>
-    ErrorLog ${APACHE_LOG_DIR}/$DOMAIN-error.log
-    CustomLog ${APACHE_LOG_DIR}/$DOMAIN-access.log combined
+    ErrorLog ${APACHE_LOG_DIR}/${DOMAIN}-error.log
+    CustomLog ${APACHE_LOG_DIR}/${DOMAIN}-access.log combined
 </VirtualHost>
 EOF
-            "${ENABLE_SITE[@]}" "$DOMAIN.conf"
+            if is_debian; then
+                sudo a2ensite "${DOMAIN}.conf"
+            fi
         done
-
-        "${DISABLE_DEFAULT[@]}"
-        "${RELOAD_CMD[@]}"
-        echo "Virtual hosts for Apache have been configured."
-
-    elif [[ "$WEB_SERVER" == "Caddy" ]]; then
-        echo "Configuring Caddy using Caddyfile..."
-        cat <<EOF > /etc/caddy/Caddyfile
-{
-    auto_https off
-}
-$(for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
-    DOMAIN=$(echo "$DOMAIN" | xargs)
-    echo "$DOMAIN {"
-    echo "    root * $DOC_ROOT/$DOMAIN"
-    echo "    file_server"
-    echo "    php_fastcgi unix//run/php/php${PHP_VERSION}-fpm.sock"
-    echo "}"
-done)
-EOF
-        sudo systemctl reload caddy
-
-    elif [[ "$WEB_SERVER" == "Lighttpd" ]]; then
-        echo "Configuring Lighttpd..."
-        for DOMAIN in "${DOMAIN_ARRAY[@]}"; do
-            DOMAIN=$(echo "$DOMAIN" | xargs)
-            mkdir -p "$DOC_ROOT/$DOMAIN"
-        done
-        sudo lighty-enable-mod fastcgi
-        sudo lighty-enable-mod fastcgi-php
-        sudo systemctl reload lighttpd
+        if is_debian; then
+            sudo a2dissite 000-default
+        fi
+        eval "$RELOAD_CMD"
+        log_info "Apache virtual hosts configured."
     fi
 }
 
+# Optimize performance (PHP, Web Server, Database tuning)
 optimize_performance() {
-    echo "Optimizing system performance..."
+    log_info "Optimizing system performance..."
+    local PHP_INI
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
     if [[ -f "$PHP_INI" ]]; then
-        cp "$PHP_INI" "${PHP_INI}.bak"
-        sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
-        sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
+        sudo cp "$PHP_INI" "${PHP_INI}.bak"
+        sudo sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
+        sudo sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
         if ! grep -q "opcache.enable" "$PHP_INI"; then
-            cat <<EOF >> "$PHP_INI"
+            cat <<EOF | sudo tee -a "$PHP_INI"
 
 ; OPcache settings for production
 opcache.enable=1
@@ -1021,128 +610,155 @@ EOF
     else
         log_error "PHP configuration file not found at $PHP_INI."
     fi
-    if [[ "$WEB_SERVER" == "Nginx" ]]; then
-        sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
+
+    if [[ "${WEB_SERVER}" == "Nginx" ]]; then
+        sudo sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
         if ! grep -q "gzip on;" /etc/nginx/nginx.conf; then
-            sed -i 's/http {*/http { \ngzip on;\ngzip_vary on;\ngzip_proxied any;\ngzip_comp_level 6;\ngzip_min_length 256;\ngzip_types text\/plain application\/xml application\/javascript text\/css;/' /etc/nginx/nginx.conf
+            sudo sed -i 's/http {*/http { \ngzip on;\ngzip_vary on;\ngzip_proxied any;\ngzip_comp_level 6;\ngzip_min_length 256;\ngzip_types text\/plain application\/xml application\/javascript text\/css;/' /etc/nginx/nginx.conf
         fi
         sudo systemctl reload nginx
-    elif [[ "$WEB_SERVER" == "Apache" ]]; then
+    elif [[ "${WEB_SERVER}" == "Apache" ]]; then
         sudo a2enmod http2 deflate
-        sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
+        sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
         sudo systemctl restart apache2
     fi
-    if [[ "$DB_ENGINE" == "MySQL" || "$DB_ENGINE" == "MariaDB" || "$DB_ENGINE" == "Percona" ]]; then
-        grep -q "innodb_buffer_pool_size" /etc/mysql/my.cnf || cat <<EOF >> /etc/mysql/my.cnf
+
+    if [[ "${DB_ENGINE}" == "MySQL" || "${DB_ENGINE}" == "MariaDB" || "${DB_ENGINE}" == "Percona" ]]; then
+        if ! grep -q "innodb_buffer_pool_size" /etc/mysql/my.cnf; then
+            cat <<EOF | sudo tee -a /etc/mysql/my.cnf
 
 [mysqld]
 innodb_buffer_pool_size=256M
 max_connections=150
 thread_cache_size=50
 EOF
+        fi
         sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb
-    elif [[ "$DB_ENGINE" == "PostgreSQL" ]]; then
-        PG_CONF="/etc/postgresql/$(ls /etc/postgresql)/main/postgresql.conf"
-        sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" "$PG_CONF"
-        sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" "$PG_CONF"
+    elif [[ "${DB_ENGINE}" == "PostgreSQL" ]]; then
+        local PG_CONF="/etc/postgresql/$(ls /etc/postgresql | head -n1)/main/postgresql.conf"
+        sudo sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" "$PG_CONF"
+        sudo sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" "$PG_CONF"
         sudo systemctl restart postgresql
     fi
 }
 
+# Security hardening for PHP and SSH.
 security_harden() {
-    echo "Starting security hardening procedures..."
+    log_info "Starting security hardening procedures..."
+    local PHP_INI
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
     if [[ -f "$PHP_INI" ]]; then
-        cp "$PHP_INI" "${PHP_INI}.sec.bak"
-        sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
-        sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
+        sudo cp "$PHP_INI" "${PHP_INI}.sec.bak"
+        sudo sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
+        sudo sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
         if ! grep -q "disable_functions" "$PHP_INI"; then
-            echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source" >> "$PHP_INI"
+            echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source" | sudo tee -a "$PHP_INI"
         fi
     fi
-    if [[ "$USE_HARDENED_SSH" == true ]]; then
+
+    if [[ "${USE_HARDENED_SSH:-false}" == true ]]; then
         harden_ssh_config
     else
-        echo "Standard SSH configuration applied. No extra hardening."
+        log_info "Standard SSH configuration applied."
     fi
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-         pkg_install unattended-upgrades
-         sudo dpkg-reconfigure -plow unattended-upgrades || true
+
+    if is_debian; then
+        pkg_install unattended-upgrades
+        sudo dpkg-reconfigure -plow unattended-upgrades || true
     else
-         log_info "Skipping dpkg-reconfigure for unattended-upgrades on non-Debian based system."
+        log_info "Skipping unattended-upgrades reconfiguration on non-Debian system."
     fi
     sudo systemctl restart fail2ban
-    echo "Security hardening complete."
+    log_info "Security hardening complete."
 }
 
+# Harden SSH configuration
 harden_ssh_config() {
-    echo "Applying hardened SSH configuration..."
+    log_info "Applying hardened SSH configuration..."
     if [[ -f /etc/ssh/sshd_config ]]; then
-        cp /etc/ssh/sshd_config /etc/ssh/sshd_config.sshhardening.bak
+        sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.sshhardening.bak
         if ! grep -q "^Protocol" /etc/ssh/sshd_config; then
-            echo "Protocol 2" >> /etc/ssh/sshd_config
+            echo "Protocol 2" | sudo tee -a /etc/ssh/sshd_config
         else
-            sed -i 's/^Protocol.*/Protocol 2/' /etc/ssh/sshd_config
+            sudo sed -i 's/^Protocol.*/Protocol 2/' /etc/ssh/sshd_config
         fi
-        sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-        sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-        sed -i 's/^#*Port.*/Port 2222/' /etc/ssh/sshd_config
-        sed -i 's/^#*X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
-        sed -i 's/^#*AllowAgentForwarding.*/AllowAgentForwarding no/' /etc/ssh/sshd_config
-        sed -i 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
-        sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/' /etc/ssh/sshd_config
-        sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/' /etc/ssh/sshd_config
-        sed -i 's/^#*LoginGraceTime.*/LoginGraceTime 30/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*Port.*/Port 2222/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*AllowAgentForwarding.*/AllowAgentForwarding no/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/' /etc/ssh/sshd_config
+        sudo sed -i 's/^#*LoginGraceTime.*/LoginGraceTime 30/' /etc/ssh/sshd_config
         if ! grep -q "^Ciphers" /etc/ssh/sshd_config; then
-            echo "Ciphers aes256-ctr,aes192-ctr,aes128-ctr" >> /etc/ssh/sshd_config
+            echo "Ciphers aes256-ctr,aes192-ctr,aes128-ctr" | sudo tee -a /etc/ssh/sshd_config
         fi
         if ! grep -q "^MACs" /etc/ssh/sshd_config; then
-            echo "MACs hmac-sha2-512,hmac-sha2-256" >> /etc/ssh/sshd_config
+            echo "MACs hmac-sha2-512,hmac-sha2-256" | sudo tee -a /etc/ssh/sshd_config
         fi
         if ! grep -q "^KexAlgorithms" /etc/ssh/sshd_config; then
-            echo "KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256" >> /etc/ssh/sshd_config
+            echo "KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256" | sudo tee -a /etc/ssh/sshd_config
         fi
         if [[ -n "${SSH_ALLOWED_USERS:-}" ]]; then
-            sed -i "s/^#*AllowUsers.*/AllowUsers $SSH_ALLOWED_USERS/" /etc/ssh/sshd_config
+            sudo sed -i "s/^#*AllowUsers.*/AllowUsers ${SSH_ALLOWED_USERS}/" /etc/ssh/sshd_config
         fi
         sudo systemctl reload sshd
-        echo "Hardened SSH configuration applied."
+        log_info "Hardened SSH configuration applied."
     else
-        echo "SSH configuration file not found; skipping SSH hardening."
+        log_info "SSH configuration file not found; skipping SSH hardening."
     fi
 }
 
+# Setup a basic firewall configuration.
+setup_firewall() {
+    log_info "Configuring firewall..."
+    if [[ "$FIREWALL" == "ufw" ]] && command -v ufw >/dev/null 2>&1; then
+        sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw allow 2222/tcp
+        sudo ufw enable
+    elif [[ "$FIREWALL" == "firewalld" ]]; then
+        sudo firewall-cmd --permanent --add-service=http
+        sudo firewall-cmd --permanent --add-service=https
+        sudo firewall-cmd --permanent --add-port=2222/tcp
+        sudo firewall-cmd --reload
+    else
+        log_info "No firewall setup required or available."
+    fi
+}
+
+# Setup SSH deployment user if requested.
 setup_ssh_deployment() {
-    echo "Setting up SSH deployment environment..."
+    log_info "Setting up SSH deployment environment..."
     pkg_install openssh-server
     if [[ "${SETUP_SSH_DEPLOY:-false}" == true ]]; then
         read -p "Enter deployment username (default: deploy): " DEPLOY_USER
         DEPLOY_USER=${DEPLOY_USER:-deploy}
         if id "$DEPLOY_USER" &>/dev/null; then
-            echo "User $DEPLOY_USER already exists."
+            log_info "User ${DEPLOY_USER} already exists."
         else
             sudo adduser --disabled-password --gecos "" "$DEPLOY_USER"
             sudo usermod -aG sudo "$DEPLOY_USER"
-            echo "Created deployment user $DEPLOY_USER."
+            log_info "Created deployment user ${DEPLOY_USER}."
         fi
-        DEPLOY_AUTH_DIR="/home/$DEPLOY_USER/.ssh"
+        local DEPLOY_AUTH_DIR="/home/${DEPLOY_USER}/.ssh"
         mkdir -p "$DEPLOY_AUTH_DIR"
         chmod 700 "$DEPLOY_AUTH_DIR"
-        read -p "Enter public SSH key for $DEPLOY_USER (leave blank to skip): " DEPLOY_SSH_KEY
+        read -p "Enter public SSH key for ${DEPLOY_USER} (leave blank to skip): " DEPLOY_SSH_KEY
         if [[ -n "$DEPLOY_SSH_KEY" ]]; then
-            echo "$DEPLOY_SSH_KEY" > "$DEPLOY_AUTH_DIR/authorized_keys"
+            echo "$DEPLOY_SSH_KEY" | tee "$DEPLOY_AUTH_DIR/authorized_keys" >/dev/null
             chmod 600 "$DEPLOY_AUTH_DIR/authorized_keys"
             sudo chown -R "$DEPLOY_USER":"$DEPLOY_USER" "$DEPLOY_AUTH_DIR"
-            echo "SSH key added for $DEPLOY_USER."
+            log_info "SSH key added for ${DEPLOY_USER}."
         else
-            echo "No SSH key provided; skipping key configuration for $DEPLOY_USER."
+            log_info "No SSH key provided; skipping key configuration."
         fi
     fi
-    echo "SSH deployment setup complete. SSH now listens on port 2222."
+    log_info "SSH deployment setup complete. SSH now set to listen on port 2222."
 }
 
+# Generate Docker Compose file.
 generate_docker_compose() {
-    echo "Generating Docker Compose file..."
+    log_info "Generating Docker Compose file..."
     cat <<EOF > docker-compose.yml
 version: '3.8'
 services:
@@ -1152,13 +768,13 @@ services:
       - "80:80"
       - "443:443"
 EOF
-    case $DB_ENGINE in
+    case "${DB_ENGINE}" in
         "MySQL"|"MariaDB"|"Percona")
             cat <<EOF >> docker-compose.yml
   db:
     image: mysql:5.7
     environment:
-      - MYSQL_ROOT_PASSWORD=$DB_PASSWORD
+      - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
 EOF
             ;;
         "PostgreSQL")
@@ -1166,7 +782,7 @@ EOF
   db:
     image: postgres:latest
     environment:
-      - POSTGRES_PASSWORD=$DB_PASSWORD
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
 EOF
             ;;
         "SQLite")
@@ -1182,38 +798,42 @@ EOF
             echo "  # Oracle XE requires manual container configuration." >> docker-compose.yml
             ;;
     esac
-    if [[ "$CACHE_SETUP" == "Redis" ]]; then
+    if [[ "${CACHE_SETUP}" == "Redis" ]]; then
         cat <<EOF >> docker-compose.yml
   cache:
     image: redis:latest
 EOF
-    elif [[ "$CACHE_SETUP" == "Memcached" ]]; then
+    elif [[ "${CACHE_SETUP}" == "Memcached" ]]; then
         cat <<EOF >> docker-compose.yml
   cache:
     image: memcached:latest
 EOF
-    elif [[ "$CACHE_SETUP" == "Varnish" ]]; then
+    elif [[ "${CACHE_SETUP}" == "Varnish" ]]; then
         cat <<EOF >> docker-compose.yml
   cache:
     image: varnish:latest
 EOF
     fi
-    if [[ "$MSG_QUEUE" == "RabbitMQ" ]]; then
-        cat <<EOF >> docker-compose.yml
+    case "${MSG_QUEUE}" in
+        "RabbitMQ")
+            cat <<EOF >> docker-compose.yml
   mq:
     image: rabbitmq:management
 EOF
-    elif [[ "$MSG_QUEUE" == "Kafka" ]]; then
-        cat <<EOF >> docker-compose.yml
+            ;;
+        "Kafka")
+            cat <<EOF >> docker-compose.yml
   mq:
     image: confluentinc/cp-kafka:latest
 EOF
-    fi
-    echo "Docker Compose file generated: docker-compose.yml"
+            ;;
+    esac
+    log_info "Docker Compose file generated: docker-compose.yml"
 }
 
+# Generate Ansible playbook.
 generate_ansible_playbook() {
-    echo "Generating Ansible playbook..."
+    log_info "Generating Ansible playbook..."
     cat <<EOF > site.yml
 - hosts: all
   become: true
@@ -1227,133 +847,94 @@ generate_ansible_playbook() {
         - apache2
         - mysql-server
 EOF
-    echo "Ansible playbook generated: site.yml"
+    log_info "Ansible playbook generated: site.yml"
 }
 
+# Install phpMyAdmin (for Debian-based systems)
 install_phpmyadmin() {
-    echo "Installing phpMyAdmin..."
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+    log_info "Installing phpMyAdmin..."
+    if is_debian; then
          pkg_install phpmyadmin
-         if [ -d "/usr/share/phpmyadmin" ] && [ ! -L "$DOC_ROOT/phpmyadmin" ]; then
-             sudo ln -s /usr/share/phpmyadmin "$DOC_ROOT/phpmyadmin"
+         if [[ -d "/usr/share/phpmyadmin" && ! -L "${DOC_ROOT}/phpmyadmin" ]]; then
+             sudo ln -s /usr/share/phpmyadmin "${DOC_ROOT}/phpmyadmin"
          fi
     else
-         echo "phpMyAdmin installation on this distribution requires manual configuration."
+         log_error "phpMyAdmin installation on $DISTRO requires manual configuration."
     fi
 }
 
-###################################
-# Upgrade and Uninstall Functions  #
-###################################
+# Upgrade system and reconfigure services.
 upgrade_system() {
-    echo "Upgrading system and reconfiguring services..."
-    update_system
-    if [[ "$INSTALL_TYPE" == "standard" ]]; then
+    log_info "Upgrading system and reconfiguring services..."
+    pkg_update
+    if [[ "${INSTALL_TYPE}" == "standard" ]]; then
         install_standard
     else
         install_lamp
     fi
 }
 
+# Uninstall components
 uninstall_components() {
-    echo "Preparing to uninstall the following components:"
-    
-    PACKAGES_TO_REMOVE=(
-        "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" "mysql-server"
-        "mariadb-server" "percona-server-server" "postgresql" "php*"
-        "certbot" "$FIREWALL" "vsftpd" "unattended-upgrades" "fail2ban"
-        "redis-server" "rabbitmq-server"
-    )
-    
-    echo "---------------------------------------------"
-    echo "The following packages will be removed:"
-    for pkg in "${PACKAGES_TO_REMOVE[@]}"; do
-        echo "  - $pkg"
-    done
-    
-    echo ""
-    echo "The following directories and files will be removed:"
-    DIRS_TO_REMOVE=(
-        "/etc/apache2" "/etc/nginx" "/etc/caddy" "$DOC_ROOT"
-        "/etc/php" "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt"
-        "/etc/fail2ban" "docker-compose.yml" "site.yml"
-    )
+    log_info "Preparing to uninstall components..."
+    local PACKAGES_TO_REMOVE=( "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" "mysql-server" "mariadb-server" "percona-server-server" "postgresql" "php*" "certbot" "${FIREWALL}" "vsftpd" "unattended-upgrades" "fail2ban" "redis-server" "rabbitmq-server" )
+    log_info "Packages to be removed: ${PACKAGES_TO_REMOVE[*]}"
+    local DIRS_TO_REMOVE=( "/etc/apache2" "/etc/nginx" "/etc/caddy" "${DOC_ROOT}" "/etc/php" "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt" "/etc/fail2ban" "docker-compose.yml" "site.yml" )
     if [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
         DIRS_TO_REMOVE+=( "/var/lib/mysql" "/etc/my.cnf" "/etc/my.cnf.d" )
     fi
 
-    for item in "${DIRS_TO_REMOVE[@]}"; do
-        echo "  - $item"
+    echo "WARNING: The following packages and directories will be removed:"
+    for item in "${PACKAGES_TO_REMOVE[@]}" "${DIRS_TO_REMOVE[@]}"; do
+        echo "   - $item"
     done
-    echo "---------------------------------------------"
-    
-    read -rp "Are you sure you want to proceed with the uninstall? This action cannot be reversed! (y/N): " confirmation
+
+    read -rp "Are you sure you want to proceed? This action cannot be reversed! (y/N): " confirmation
     if [[ ! "$confirmation" =~ ^[Yy]$ ]]; then
-        echo "Uninstallation aborted by the user."
+        log_info "Uninstallation aborted by user."
         exit 0
     fi
 
-    echo "Stopping services..."
+    log_info "Stopping services..."
     for service in apache2 nginx caddy lighttpd mysql mariadb postgresql mongod; do
         sudo systemctl stop "$service" 2>/dev/null || true
     done
 
-    echo "Removing packages..."
+    log_info "Removing packages..."
     for pkg in "${PACKAGES_TO_REMOVE[@]}"; do
         remove_if_installed "$pkg"
     done
 
-    echo "Cleaning up residual files and directories..."
+    log_info "Cleaning up directories..."
     for item in "${DIRS_TO_REMOVE[@]}"; do
         sudo rm -rf "$item"
     done
 
-    if [[ "$FIREWALL" == "ufw" ]]; then
-        if command -v ufw >/dev/null 2>&1; then
-            sudo ufw disable || true
-        else
-            echo "⚠️  UFW not found; skipping firewall disable for ufw."
-        fi
+    if [[ "$FIREWALL" == "ufw" && $(command -v ufw) ]]; then
+        sudo ufw disable || true
     else
         sudo systemctl stop firewalld || true
         sudo systemctl disable firewalld || true
     fi
 
-    if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+    if is_debian; then
         sudo apt-get autoremove -y && sudo apt-get autoclean
-    elif [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
+    else
         if command -v dnf >/dev/null 2>&1; then
             sudo dnf autoremove -y
         else
             sudo yum autoremove -y
         fi
     fi
-
-    echo "Components uninstalled."
+    log_info "Uninstallation complete."
 }
 
-###################################
-# Main Execution Block             #
-###################################
-case $MODE in
-    install)
-        if [[ "$INSTALL_TYPE" == "standard" ]]; then
-            install_standard
-        else
-            install_lamp
-        fi
-        ;;
-    upgrade)
-        upgrade_system
-        ;;
-    uninstall)
-        uninstall_components
-        ;;
-esac
+##############################
+# Installation Modes
+##############################
 
-# Installation Functions with integrated DocumentRoot pre-check and Apache restart/s (if applicable)
 install_standard() {
-    echo "Starting Standard LAMP installation (Apache, MariaDB, PHP, phpMyAdmin)..."
+    log_info "Starting Standard LAMP installation (Apache, MariaDB, PHP, phpMyAdmin)..."
     install_prerequisites
     prepare_docroot
     install_php
@@ -1365,13 +946,13 @@ install_standard() {
     setup_firewall
     security_harden
     setup_ssh_deployment
-    if [[ "$WEB_SERVER" == "Apache" ]]; then
-        echo "Restarting Apache to verify configuration..."
+    if [[ "${WEB_SERVER}" == "Apache" ]]; then
+        log_info "Restarting Apache..."
         sudo systemctl restart "$APACHE_PACKAGE"
         sudo systemctl status "$APACHE_PACKAGE"
     fi
-    echo "✅ Standard LAMP installation is complete!"
-    echo "Detailed log file saved at: $LOGFILE"
+    log_info "✅ Standard LAMP installation is complete!"
+    echo "Detailed log file saved at: ${LOGFILE}"
 }
 
 install_lamp() {
@@ -1396,8 +977,195 @@ install_lamp() {
     fi
 }
 
-echo "✅ Installation, configuration, and additional engine deployments are complete!"
+install_prerequisites() {
+    pkg_update
+    if is_debian; then
+        pkg_install software-properties-common openssh-server ufw fail2ban
+    else
+        pkg_install openssh-server firewalld fail2ban
+        if ! rpm -q epel-release >/dev/null 2>&1; then
+            pkg_install epel-release
+        fi
+    fi
+    if [[ "${INSTALL_UTILS:-false}" == true ]]; then
+        pkg_install git curl htop zip unzip
+    fi
+}
 
-if [[ "$MODE" != "uninstall" && -v LOGFILE ]]; then
-    echo "Detailed log file saved at: $LOGFILE"
-fi
+##############################
+# Main Interactive Flow
+##############################
+main() {
+    # Initialize distro and set global variables.
+    DISTRO=$(init_distro)
+    log_info "Running the script on: ${DISTRO}"
+
+    if is_debian; then
+        APACHE_PACKAGE="apache2"
+        APACHE_UTILS="apache2-utils"
+        REDIS_PACKAGE="redis-server"
+        JAVA_PACKAGE="openjdk-11-jdk"
+        FIREWALL="ufw"
+    else
+        APACHE_PACKAGE="httpd"
+        APACHE_UTILS=""
+        REDIS_PACKAGE="redis"
+        JAVA_PACKAGE="java-11-openjdk-devel"
+        FIREWALL="firewalld"
+    fi
+
+    # Set default DocumentRoot if not already set.
+    DOC_ROOT=${DOC_ROOT:-/var/www/html}
+
+    # Display Banner (you can customize or remove the ASCII art as needed)
+    RED='\033[0;31m'
+    NC='\033[0m'
+    ART=(
+    "   _        _______  _______  _______    ______                                _        _______ _________ _______   "
+    "  ( \      (  ___  )(       )(  ____ )  (  ___ \ |\     /|  |\     /||\     /|( \      ( ____ \\__   __/(  ____ \  "
+    "  | (      | (   ) || () () || (    )|  | (   ) )( \   / )  | )   ( || )   ( || (      | (    \/   ) (   | (    \/  "
+    "  | |      | (___) || || || || (____)|  | (__/ /  \ (_) /   | | _ | || |   | || |      | (__       | |   | |        "
+    "  | |      |  ___  || |(_)| ||  _____)  |  __ (    \   /    | |( )| || |   | || |      |  __)      | |   | |        "
+    "  | |      | (   ) || |   | || (        | (  \ \    ) (     | || || || |   | || |      | (         | |   | |        "
+    "  | (____/\| )   ( || )   ( || )        | )___) )   | |     | () () || (___) || (____/\| )      ___) (___| (____/\  "
+    "  (_______/|/     \||/     \||/         |/ \___/    \_/     (_______)(_______)(_______/|/       \_______/(_______/  "
+    "###########################################################################################################"
+    "#################################### Lamp by Wulfic #####################################################"
+    "01001100 01100001 01101101 01110000  01100010 01111001  01010111 01110101 01101100 01100110 01101001 01100011 "
+    )
+    for line in "${ART[@]}"; do
+        printf "${RED}%s\n" "$line"
+    done
+    printf "${NC}\n"  # Reset color
+
+    # User interactive prompts (skip for uninstall mode)
+    if [[ "${MODE:-}" != "uninstall" ]]; then
+        echo "Choose an operation:"
+        select ACTION in "Install" "Upgrade" "Uninstall"; do
+            case $ACTION in
+                Install ) MODE="install"; break;;
+                Upgrade ) MODE="upgrade"; break;;
+                Uninstall ) MODE="uninstall"; break;;
+            esac
+        done
+
+        if [[ "$MODE" != "uninstall" ]]; then
+            echo "Select installation type:"
+            select INSTALL_TYPE in "Standard LAMP" "Advanced Installation"; do
+                case $INSTALL_TYPE in
+                    "Standard LAMP") INSTALL_TYPE="standard"; break;;
+                    "Advanced Installation") INSTALL_TYPE="advanced"; break;;
+                esac
+            done
+
+            # Common prompts
+            read -s -p "Enter a default password for DB and admin panels: " DB_PASSWORD
+            echo
+            read -p "Enter domain name(s) (comma-separated): " DOMAINS
+            if [[ -z "$DOMAINS" ]]; then
+                log_error "No domains provided. Exiting."
+                exit 1
+            fi
+            IFS=',' read -ra DOMAIN_ARRAY <<< "$DOMAINS"
+            if [[ ${#DOMAIN_ARRAY[@]} -eq 0 ]]; then
+                log_error "No valid domains provided. Exiting."
+                exit 1
+            fi
+            read -p "Enter document root directory (default: /var/www/html): " DOC_ROOT
+            DOC_ROOT=${DOC_ROOT:-/var/www/html}
+
+            if [[ "$INSTALL_TYPE" == "standard" ]]; then
+                DB_ENGINE="MariaDB"
+                WEB_SERVER="Apache"
+                PHP_VERSION=$(best_php_version)
+                INSTALL_UTILS=false
+                INSTALL_FTP=false
+                CACHE_SETUP="None"
+                MSG_QUEUE="None"
+                USE_HARDENED_SSH=false
+                GENERATE_DOCKER=false
+                GENERATE_ANSIBLE=false
+                log_info "Standard LAMP installation selected: Apache, MariaDB, PHP, and phpMyAdmin."
+            else
+                PHP_VERSION=$(best_php_version)
+                echo "Auto-selected best PHP version: ${PHP_VERSION}"
+                echo "Select database engine:"
+                select DB_ENGINE in "MySQL" "MariaDB" "PostgreSQL" "SQLite" "Percona" "MongoDB" "OracleXE"; do break; done
+                echo "Install optional tools (git, curl, htop, zip, etc.)?"
+                select UTIL_TOOLS in "Yes" "No"; do
+                    [[ "$UTIL_TOOLS" == "Yes" ]] && INSTALL_UTILS=true || INSTALL_UTILS=false; break
+                done
+                echo "Install FTP/SFTP server?"
+                select FTP_SETUP in "Yes" "No"; do
+                    [[ "$FTP_SETUP" == "Yes" ]] && INSTALL_FTP=true || INSTALL_FTP=false; break
+                done
+                echo "Enable caching (Redis/Memcached/Varnish)?"
+                select CACHE_SETUP in "Redis" "Memcached" "Varnish" "None"; do break; done
+                echo "Select messaging queue engine:"
+                select MSG_QUEUE in "RabbitMQ" "Kafka" "None"; do break; done
+                echo "Select web server:"
+                select WEB_SERVER in "Nginx" "Apache" "Caddy" "Lighttpd"; do break; done
+                echo "Setup SSH deployment user?"
+                select SSH_DEPLOY in "Yes" "No"; do
+                    [[ "$SSH_DEPLOY" == "Yes" ]] && SETUP_SSH_DEPLOY=true || SETUP_SSH_DEPLOY=false; break
+                done
+                echo "Restrict SSH logins to specific users? (Optional)"
+                read -p "Enter allowed SSH usernames (space‑separated, leave empty for all): " SSH_ALLOWED_USERS
+                echo "Select SSH configuration type:"
+                select SSH_CONFIG_OPTION in "Standard SSH" "Hardened SSH"; do
+                    case $SSH_CONFIG_OPTION in
+                        "Standard SSH" ) USE_HARDENED_SSH=false; break;;
+                        "Hardened SSH" ) USE_HARDENED_SSH=true; break;;
+                    esac
+                done
+                echo "Generate Docker Compose file for containerized deployment?"
+                select DOCKER_OPTION in "Yes" "No"; do
+                    [[ "$DOCKER_OPTION" == "Yes" ]] && GENERATE_DOCKER=true || GENERATE_DOCKER=false; break
+                done
+                echo "Generate Ansible playbook for automation?"
+                select ANSIBLE_OPTION in "Yes" "No"; do
+                    [[ "$ANSIBLE_OPTION" == "Yes" ]] && GENERATE_ANSIBLE=true || GENERATE_ANSIBLE=false; break
+                done
+            fi
+
+            if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+                USER_HOME=$(eval echo "~$SUDO_USER")
+            else
+                USER_HOME=$HOME
+            fi
+
+            if [[ -d "$USER_HOME/Desktop" ]]; then
+                LOGFILE="$USER_HOME/Desktop/installer.log"
+            else
+                LOGFILE="$USER_HOME/installer.log"
+            fi
+
+            echo "Installation started at $(date)" > "$LOGFILE"
+            exec > >(tee -a "$LOGFILE") 2>&1
+        fi
+    fi
+
+    # Final mode selection and execution
+    case "$MODE" in
+        install)
+            if [[ "$INSTALL_TYPE" == "standard" ]]; then
+                install_standard
+            else
+                install_lamp
+            fi
+            ;;
+        upgrade)
+            upgrade_system
+            ;;
+        uninstall)
+            uninstall_components
+            ;;
+    esac
+
+    if [[ "$MODE" != "uninstall" && -n "$LOGFILE" ]]; then
+        echo "Detailed log file saved at: $LOGFILE"
+    fi
+}
+
+# Now execute the main function.
+main
