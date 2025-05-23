@@ -69,7 +69,6 @@ check_dependencies() {
     fi
 
     # 4. Prepare a list of essential dependencies along with hints for installation.
-    #    Using an associative array for hints makes it easier to expand recommendations.
     declare -A dependency_hints
     dependency_hints["systemctl"]="systemctl (usually part of systemd)"
     dependency_hints["wget"]="wget (e.g., sudo $pkg_manager install wget)"
@@ -146,7 +145,6 @@ check_dependencies() {
 
     return 0
 }
-
 
 # Default DOC_ROOT initialization to avoid unbound variable issues (especially during uninstall)
 DOC_ROOT=${DOC_ROOT:-/var/www/html}
@@ -680,7 +678,7 @@ install_database() {
     
     # Ensure we switch to MariaDB if MySQL is unavailable on certain distros
     if [[ "$DB_ENGINE" == "MySQL" && ( "$DISTRO" == "centos" || "$DISTRO" == "rhel" || "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" ) ]]; then
-        echo "MySQL is not available by default on $PRETTY_NAME; switching to MariaDB."
+        echo "MySQL is not available by default on this distribution; switching to MariaDB."
         DB_ENGINE="MariaDB"
     fi
     
@@ -701,8 +699,11 @@ DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
             else
-                echo "Authentication plugin is not unix_socket; setting root to use mysql_native_password."
-                sudo mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD'; FLUSH PRIVILEGES;"
+                echo "Authentication plugin is not unix_socket; updating root password."
+                sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
             fi
             ;;
         
@@ -813,7 +814,7 @@ install_web_server() {
                 update_system
                 pkg_install caddy
             else
-                echo "Caddy installation on $PRETTY_NAME may require manual intervention."
+                echo "Caddy installation on this distribution may require manual intervention."
             fi
             ;;
         "Lighttpd")
