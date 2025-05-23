@@ -306,7 +306,6 @@ install_php() {
             pkg_install ${PHP_MODULES[sqlite]}
         fi
     else
-        # For RPM‐based systems (CentOS, Rocky Linux, AlmaLinux, RHEL, Fedora)
         # Determine the correct Remi repository package URL based on the distribution release
         if [[ "$DISTRO" == "rocky" || "$DISTRO" == "almalinux" || "$DISTRO" == "rhel" ]]; then
             local rel
@@ -320,12 +319,12 @@ install_php() {
             REMI_RPM="https://rpms.remirepo.net/enterprise/remi-release-8.rpm"
         fi
 
-        # Install Remi repo if not already present
+        # Install Remi repository if not already present
         if ! rpm -q remi-release >/dev/null 2>&1; then
             pkg_install "$REMI_RPM"
         fi
 
-        # Enable EPEL and extra repositories
+        # Enable additional repositories
         enable_epel_and_powertools
 
         # Reset any existing PHP module settings
@@ -337,32 +336,23 @@ install_php() {
                 echo "Remi PHP module stream successfully enabled on Rocky Linux."
             else
                 log_error "Failed to enable/install php:remi-${version_lc} module stream on Rocky Linux. Falling back to regular dnf installation."
-                # Fall back: do not exit but proceed with a regular dnf install below.
             fi
-
-            # Proceed with installing PHP packages using the generic package names
             pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
-
-            if [[ "$DB_ENGINE" == "SQLite" ]]; then
-                pkg_install ${PHP_MODULES[sqlite]}
-            fi
         else
-            # For non-Rocky RPM-based systems, enforce the Remi module stream installation.
+            # For RPM-based systems other than Rocky, enforce the Remi module stream installation.
             if ! dnf module enable php:remi-"${version_lc}" -y; then
                 log_error "Failed to enable php:remi-${version_lc} module stream"
                 exit 1
             fi
-
             if ! dnf module install php:remi-"${version_lc}" -y; then
                 log_error "Failed to install php:remi-${version_lc} module group"
                 exit 1
             fi
+            pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
+        fi
 
-            dnf install php -y
-
-            if [[ "$DB_ENGINE" == "SQLite" ]]; then
-                pkg_install ${PHP_MODULES[sqlite]}
-            fi
+        if [[ "$DB_ENGINE" == "SQLite" ]]; then
+            pkg_install ${PHP_MODULES[sqlite]}
         fi
     fi
 }
