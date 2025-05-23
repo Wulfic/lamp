@@ -358,7 +358,7 @@ install_php() {
                 exit 1
             fi
 
-            pkg_install php php-cli php-mysqlnd php-gd php-curl php-mbstring php-xml php-zip
+            dnf install php -y
 
             if [[ "$DB_ENGINE" == "SQLite" ]]; then
                 pkg_install ${PHP_MODULES[sqlite]}
