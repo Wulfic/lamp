@@ -67,6 +67,16 @@ detect_distro() {
     fi
 }
 
+# Determine the Linux distribution
+	if [ -f /etc/os-release ]; then
+	  . /etc/os-release
+	  DISTRO_ID=$ID
+	else
+	  DISTRO_ID=$(uname -s)
+	fi
+
+	echo "Detected distribution: $DISTRO_ID"
+
 # Allow pre-setting DISTRO from the environment; otherwise, auto-detect.
 init_distro() {
     local detected=""
@@ -872,34 +882,59 @@ enable_apache_module() {
   fi
 }
 
-# -----------------------------------------------------------------------------
-# Function: Install and Configure phpMyAdmin
-# -----------------------------------------------------------------------------
 install_phpmyadmin() {
-  if [[ "$DISTRO_ID" == "rocky" ]]; then
-    echo "Manual configuration required for phpMyAdmin installation on Rocky Linux."
-    echo "---------------------------------------------------------"
-    echo "Steps to install and configure phpMyAdmin manually:"
-    echo "1. Install phpMyAdmin from the EPEL repository:"
-    echo "     sudo dnf install epel-release"
-    echo "     sudo dnf install phpMyAdmin"
-    echo "2. Edit the Apache configuration file:"
-    echo "     sudo vi /etc/httpd/conf.d/phpMyAdmin.conf"
-    echo "   Adjust access controls (for example, replace 'Require local' with 'Require all granted' or a more secure alternative)."
-    echo "3. Ensure SELinux and firewall rules allow access as needed."
-    echo "4. Restart Apache:"
-    echo "     sudo systemctl restart httpd"
-    echo "---------------------------------------------------------"
-    # Skip further automatic configuration for phpMyAdmin
-    return 1
+  # Ensure we're sourcing OS release information
+  if [ -f /etc/os-release ]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
   else
-    echo "Proceeding with automatic phpMyAdmin configuration..."
-    # Insert your Debian/Ubuntu style phpMyAdmin configuration here
-    # For example:
-    # sudo apt-get install phpmyadmin -y
-    # sudo ln -s /usr/share/phpmyadmin /var/www/html/phpmyadmin
+    echo "Error: /etc/os-release not found. Cannot determine the OS."
+    return 1
   fi
+
+  # Normalize the ID for consistency (if needed)
+  distro_id=$(echo "$ID" | tr '[:upper:]' '[:lower:]')
+
+  echo "Detected OS: $PRETTY_NAME"
+
+  case "$distro_id" in
+    ubuntu|debian)
+      echo "Updating package lists..."
+      sudo apt-get update -y
+      
+      echo "Installing phpMyAdmin..."
+      # Use DEBIAN_FRONTEND=noninteractive to avoid interactive prompts
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install -y phpmyadmin
+      ;;
+
+    centos|rocky|almalinux|rhel)
+      # For RHEL-based distributions, ensure that the EPEL repository is available
+      if ! rpm -qa | grep -qw epel-release; then
+        echo "EPEL repository not found. Installing epel-release..."
+        sudo yum install -y epel-release
+      fi
+
+      echo "Installing phpMyAdmin..."
+      # Note: Using 'yum' is valid on these systems (or 'dnf' if available)
+      sudo yum install -y phpMyAdmin
+      ;;
+
+    fedora)
+      echo "Installing phpMyAdmin..."
+      # Fedora typically uses dnf
+      sudo dnf install -y phpMyAdmin
+      ;;
+
+    *)
+      echo "Unsupported distribution: $distro_id"
+      return 1
+      ;;
+  esac
+
+  echo "phpMyAdmin installation completed successfully."
 }
+
+
 
 # -----------------------------------------------------------------------------
 # Apache Module Example: Enable mod_rewrite
