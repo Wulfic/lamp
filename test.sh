@@ -695,27 +695,41 @@ install_database() {
     
     case $DB_ENGINE in
         "MariaDB")
-            pkg_install mariadb-server
-            systemctl enable --now mariadb
+			pkg_install mariadb-server
+			systemctl enable --now mariadb
 
-            echo "Applying secure MariaDB configuration..."
-            AUTH_PLUGIN=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
-            if [[ "$AUTH_PLUGIN" == "unix_socket" ]]; then
-                echo "Unix socket authentication detected; updating root password using socket auth."
-                sudo mysql <<EOF
+			echo "Applying secure MariaDB configuration..."
+			AUTH_PLUGIN=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+			if [[ "$AUTH_PLUGIN" == "unix_socket" ]]; then
+				echo "Unix socket authentication detected; updating root password using socket auth."
+				sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
-            else
-                echo "Authentication plugin is not unix_socket; updating root password."
-                sudo mysql <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_PASSWORD';
+			else
+				echo "Authentication plugin is not unix_socket; updating root password using native password plugin."
+				# If CURRENT_ROOT_PASSWORD is not set, prompt the user
+				if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
+					read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
+					echo
+				fi
+				if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
+					sudo mysql -uroot -p"$CURRENT_ROOT_PASSWORD" <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD';
 FLUSH PRIVILEGES;
 EOF
-            fi
-            ;;
+				else
+					sudo mysql -uroot <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$DB_PASSWORD';
+FLUSH PRIVILEGES;
+EOF
+				fi
+			fi
+			;;
+
+
         
         "MySQL")
             pkg_install mysql-server
