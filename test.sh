@@ -42,6 +42,34 @@ esac
 echo "Running the script on: $DISTRO"
 
 ##########################################
+# Default DOC_ROOT initialization        #
+##########################################
+DOC_ROOT=${DOC_ROOT:-/var/www/html}
+
+##########################################
+# Prepare DocumentRoot                     #
+##########################################
+prepare_docroot() {
+    echo "Preparing DocumentRoot directory at $DOC_ROOT..."
+    if [ ! -d "$DOC_ROOT" ]; then
+        echo "Creating $DOC_ROOT..."
+        sudo mkdir -p "$DOC_ROOT"
+    fi
+    # Determine the appropriate Apache user based on distro.
+    if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
+        owner="www-data"
+    else
+        owner="apache"
+    fi
+    sudo chown -R "$owner":"$owner" "$DOC_ROOT"
+    sudo chmod -R 755 "$DOC_ROOT"
+    # If SELinux is enforced, restore the proper security context.
+    if command -v restorecon >/dev/null 2>&1; then
+        sudo restorecon -Rv "$DOC_ROOT"
+    fi
+}
+
+##########################################
 # Logging Functions                      #
 ##########################################
 log_error() {
@@ -160,9 +188,6 @@ check_dependencies() {
     return 0
 }
 
-# Default DOC_ROOT initialization to avoid unbound variable issues
-DOC_ROOT=${DOC_ROOT:-/var/www/html}
-
 # Cleanup function
 cleanup() {
     if [[ -f /tmp/kafka.tgz ]]; then
@@ -175,7 +200,6 @@ trap cleanup EXIT
 ##########################################
 # Helper Functions                       #
 ##########################################
-
 detect_distro() {
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
@@ -335,7 +359,6 @@ remove_if_installed() {
 ##########################################
 # Distro‑Specific Package Mappings       #
 ##########################################
-# Here we assign proper package names based on distro.
 if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
     APACHE_PACKAGE="apache2"
     APACHE_UTILS="apache2-utils"
@@ -697,7 +720,6 @@ install_database() {
             sudo systemctl enable --now mariadb
 
             echo "Applying secure MariaDB configuration..."
-            # --- FIX APPLIED: For Rocky Linux, AlmaLinux, and RHEL, force the socket authentication branch.
             if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
                 echo "Detected $DISTRO: Forcing unix_socket authentication update without using a current password."
                 sudo mysql <<EOF
@@ -718,7 +740,6 @@ FLUSH PRIVILEGES;
 EOF
                 else
                     echo "Authentication plugin is not unix_socket; updating root password using native password plugin."
-                    # If CURRENT_ROOT_PASSWORD is not set, prompt the user
                     if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
                         read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
                         echo
@@ -854,36 +875,34 @@ install_messaging_queue() {
 }
 
 install_web_server() {
-	  case $WEB_SERVER in
-		"Nginx")
-			  pkg_install nginx
-			  ;;
-		"Apache")
-			  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-				  pkg_install apache2 apache2-utils
-			  else
-				  pkg_install "$APACHE_PACKAGE"
-				  # Suggestion 1: Enable and start Apache (httpd) on RPM‑based distributions immediately after installation.
-				  sudo systemctl enable --now "$APACHE_PACKAGE"
-			  fi
-			  ;;
-		"Caddy")
-			  if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
-				  pkg_install debian-keyring debian-archive-keyring apt-transport-https
-				  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
-				  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-				  update_system
-				  pkg_install caddy
-			  else
-				  echo "Caddy installation on this distribution may require manual intervention."
-			  fi
-			  ;;
-		"Lighttpd")
-			  pkg_install lighttpd
-			  ;;
-		esac
+      case $WEB_SERVER in
+        "Nginx")
+              pkg_install nginx
+              ;;
+        "Apache")
+              if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+                  pkg_install apache2 apache2-utils
+              else
+                  pkg_install "$APACHE_PACKAGE"
+                  sudo systemctl enable --now "$APACHE_PACKAGE"
+              fi
+              ;;
+        "Caddy")
+              if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+                  pkg_install debian-keyring debian-archive-keyring apt-transport-https
+                  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo tee /etc/apt/trusted.gpg.d/caddy-stable.asc
+                  curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+                  update_system
+                  pkg_install caddy
+              else
+                  echo "Caddy installation on this distribution may require manual intervention."
+              fi
+              ;;
+        "Lighttpd")
+              pkg_install lighttpd
+              ;;
+        esac
 }
-
 
 setup_virtual_hosts() {
     echo "Setting up virtual hosts..."
@@ -915,7 +934,6 @@ EOF
         sudo systemctl reload nginx
 
     elif [[ "$WEB_SERVER" == "Apache" ]]; then
-        # Define Apache-related settings with arrays for the command variables.
         if [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]; then
             VHOST_DIR="/etc/apache2/sites-available"
             ENABLE_SITE=(sudo a2ensite)
@@ -923,10 +941,9 @@ EOF
             RELOAD_CMD=(sudo systemctl reload apache2)
             APACHE_LOG_DIR="/var/log/apache2"
         else
-            # For Rocky Linux, CentOS, AlmaLinux, etc.
             VHOST_DIR="/etc/httpd/conf.d"
-            ENABLE_SITE=(":")      # No enabling step is needed
-            DISABLE_DEFAULT=(":")  # No default site to disable
+            ENABLE_SITE=(":")
+            DISABLE_DEFAULT=(":")
             RELOAD_CMD=(sudo systemctl reload httpd)
             APACHE_LOG_DIR="/var/log/httpd"
         fi
@@ -949,12 +966,8 @@ EOF
             "${ENABLE_SITE[@]}" "$DOMAIN.conf"
         done
 
-        # Disable the default site if on a Debian-based system.
         "${DISABLE_DEFAULT[@]}"
-
-        # Reload Apache using the array command.
         "${RELOAD_CMD[@]}"
-
         echo "Virtual hosts for Apache have been configured."
 
     elif [[ "$WEB_SERVER" == "Caddy" ]]; then
@@ -985,8 +998,6 @@ EOF
         sudo systemctl reload lighttpd
     fi
 }
-
-
 
 optimize_performance() {
     echo "Optimizing system performance..."
@@ -1231,71 +1242,6 @@ install_phpmyadmin() {
     fi
 }
 
-install_standard() {
-    echo "Starting Standard LAMP installation (Apache, MariaDB, PHP, phpMyAdmin)..."
-    install_prerequisites
-    install_php
-    install_database
-    install_web_server
-    setup_virtual_hosts
-    install_phpmyadmin
-    optimize_performance
-    setup_firewall
-    security_harden
-    setup_ssh_deployment
-    echo "✅ Standard LAMP installation is complete!"
-    echo "Detailed log file saved at: $LOGFILE"
-}
-
-install_lamp() {
-    install_prerequisites
-    install_php
-    install_database
-    install_ftp_sftp
-    install_cache
-    install_messaging_queue
-    install_web_server
-    setup_virtual_hosts
-    optimize_performance
-    setup_firewall
-    security_harden
-    setup_ssh_deployment
-    if [[ "${GENERATE_DOCKER:-false}" == true ]]; then
-        generate_docker_compose
-    fi
-    if [[ "${GENERATE_ANSIBLE:-false}" == true ]]; then
-        generate_ansible_playbook
-    fi
-}
-
-setup_firewall() {
-    echo "Configuring firewall..."
-    if [[ "$FIREWALL" == "ufw" ]]; then
-        sudo ufw allow OpenSSH
-        if [[ "$WEB_SERVER" == "Nginx" || "$WEB_SERVER" == "Caddy" || "$WEB_SERVER" == "Lighttpd" ]]; then
-            sudo ufw allow 'Nginx Full' 2>/dev/null || true
-            sudo ufw allow 80/tcp
-            sudo ufw allow 443/tcp
-        else
-            sudo ufw allow 'Apache Full'
-        fi
-        sudo ufw --force enable
-    elif [[ "$FIREWALL" == "firewalld" ]]; then
-        sudo systemctl start firewalld
-        sudo systemctl enable firewalld
-        if [[ "$USE_HARDENED_SSH" == true ]]; then
-            sudo firewall-cmd --permanent --add-port=2222/tcp
-        else
-            sudo firewall-cmd --permanent --add-service=ssh
-        fi
-        sudo firewall-cmd --permanent --add-service=http
-        sudo firewall-cmd --permanent --add-service=https
-        sudo firewall-cmd --reload
-    else
-        echo "Warning: No recognized firewall management found for ${DISTRO}. Skipping firewall configuration."
-    fi
-}
-
 ###################################
 # Upgrade and Uninstall Functions  #
 ###################################
@@ -1312,7 +1258,6 @@ upgrade_system() {
 uninstall_components() {
     echo "Preparing to uninstall the following components:"
     
-    # List of package names (services and utilities) to be removed.
     PACKAGES_TO_REMOVE=(
         "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" "mysql-server"
         "mariadb-server" "percona-server-server" "postgresql" "php*"
@@ -1333,7 +1278,6 @@ uninstall_components() {
         "/etc/php" "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt"
         "/etc/fail2ban" "docker-compose.yml" "site.yml"
     )
-    # For RPM‑based distributions (e.g., Rocky Linux) remove MariaDB's data and additional config dirs
     if [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
         DIRS_TO_REMOVE+=( "/var/lib/mysql" "/etc/my.cnf" "/etc/my.cnf.d" )
     fi
@@ -1343,7 +1287,6 @@ uninstall_components() {
     done
     echo "---------------------------------------------"
     
-    # Ask for confirmation from the user before proceeding.
     read -rp "Are you sure you want to proceed with the uninstall? This action cannot be reversed! (y/N): " confirmation
     if [[ ! "$confirmation" =~ ^[Yy]$ ]]; then
         echo "Uninstallation aborted by the user."
@@ -1376,7 +1319,6 @@ uninstall_components() {
         sudo systemctl disable firewalld || true
     fi
 
-    # Optionally, clean package cache for Debian‑based systems.
     if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
         sudo apt-get autoremove -y && sudo apt-get autoclean
     elif [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
@@ -1389,8 +1331,6 @@ uninstall_components() {
 
     echo "Components uninstalled."
 }
-
-
 
 ###################################
 # Main Execution Block             #
@@ -1410,6 +1350,51 @@ case $MODE in
         uninstall_components
         ;;
 esac
+
+# Installation Functions with integrated DocumentRoot pre-check and Apache restart/s (if applicable)
+install_standard() {
+    echo "Starting Standard LAMP installation (Apache, MariaDB, PHP, phpMyAdmin)..."
+    install_prerequisites
+    prepare_docroot
+    install_php
+    install_database
+    install_web_server
+    setup_virtual_hosts
+    install_phpmyadmin
+    optimize_performance
+    setup_firewall
+    security_harden
+    setup_ssh_deployment
+    if [[ "$WEB_SERVER" == "Apache" ]]; then
+        echo "Restarting Apache to verify configuration..."
+        sudo systemctl restart "$APACHE_PACKAGE"
+        sudo systemctl status "$APACHE_PACKAGE"
+    fi
+    echo "✅ Standard LAMP installation is complete!"
+    echo "Detailed log file saved at: $LOGFILE"
+}
+
+install_lamp() {
+    install_prerequisites
+    prepare_docroot
+    install_php
+    install_database
+    install_ftp_sftp
+    install_cache
+    install_messaging_queue
+    install_web_server
+    setup_virtual_hosts
+    optimize_performance
+    setup_firewall
+    security_harden
+    setup_ssh_deployment
+    if [[ "${GENERATE_DOCKER:-false}" == true ]]; then
+        generate_docker_compose
+    fi
+    if [[ "${GENERATE_ANSIBLE:-false}" == true ]]; then
+        generate_ansible_playbook
+    fi
+}
 
 echo "✅ Installation, configuration, and additional engine deployments are complete!"
 
