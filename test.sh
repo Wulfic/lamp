@@ -917,17 +917,23 @@ setup_firewall() {
     # Configure firewall according to the chosen tool.
     if [ "$FIREWALL" = "ufw" ]; then
         if command -v ufw >/dev/null 2>&1; then
+            # Start UFW if it is not already active.
+            UFW_STATUS=$(sudo ufw status | head -n1)
+            if [ "$UFW_STATUS" != "Status: active" ]; then
+                log_info "UFW is not active. Enabling UFW..."
+                # Enabling ufw will start the service and load the current rules.
+                echo "y" | sudo ufw enable
+            fi
+
+            # Add firewall rules.
             sudo ufw allow ${HTTP_PORT}/tcp
             sudo ufw allow ${HTTPS_PORT}/tcp
             sudo ufw allow ${ALT_SSH_PORT}/tcp
-            # Enable UFW (auto-confirm if necessary)
-            echo "y" | sudo ufw enable
-            log_info "UFW configured successfully on ${ID}."
 
-            # Verify UFW status
+            # Verify UFW status.
             UFW_STATUS=$(sudo ufw status | head -n1)
             if [[ "$UFW_STATUS" == "Status: active" ]]; then
-                log_info "UFW is active. Current UFW rules:"
+                log_info "UFW configured successfully on ${ID}."
                 sudo ufw status numbered
             else
                 log_warn "UFW does not appear to be active. Status: $UFW_STATUS"
@@ -939,13 +945,25 @@ setup_firewall() {
         fi
     elif [ "$FIREWALL" = "firewalld" ]; then
         if command -v firewall-cmd >/dev/null 2>&1; then
+            # Start firewalld if not already running using systemctl (if available).
+            if command -v systemctl >/dev/null 2>&1; then
+                FIREWALLD_STATE=$(sudo systemctl is-active firewalld)
+                if [ "$FIREWALLD_STATE" != "active" ]; then
+                    log_info "firewalld is not active. Starting firewalld..."
+                    sudo systemctl start firewalld
+                fi
+            fi
+
+            # Add firewall rules.
             sudo firewall-cmd --permanent --add-service=http
             sudo firewall-cmd --permanent --add-service=https
             sudo firewall-cmd --permanent --add-port=${ALT_SSH_PORT}/tcp
+
+            # Reload firewalld rules.
             sudo firewall-cmd --reload
             log_info "firewalld configured successfully on ${ID}."
 
-            # Verify firewalld status
+            # Verify firewalld state.
             FIREWALLD_STATE=$(sudo firewall-cmd --state 2>/dev/null)
             if [ "$FIREWALLD_STATE" == "running" ]; then
                 log_info "firewalld is running. Current firewalld settings:"
@@ -963,6 +981,7 @@ setup_firewall() {
         return 1
     fi
 }
+
 
 
 # Setup SSH deployment user if requested.
