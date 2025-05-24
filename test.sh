@@ -2,6 +2,29 @@
 set -euo pipefail
 IFS=$'\n\t'
 
+# Conditionals
+# Function to check for command existence
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+if command_exists a2enmod; then
+    # Debian/Ubuntu system
+    echo "Using a2enmod to enable modules..."
+    sudo a2enmod rewrite
+    sudo systemctl reload apache2
+else
+    # Likely a RHEL-based system (Rocky Linux, CentOS, etc.)
+    echo "Detected non-Debian system. Enabling rewrite module manually..."
+    CONFIG_FILE="/etc/httpd/conf.modules.d/00-base.conf"
+    # Check if the LoadModule line for rewrite is already present
+    if ! sudo grep -q "LoadModule rewrite_module" "$CONFIG_FILE"; then
+        echo "LoadModule rewrite_module modules/mod_rewrite.so" | sudo tee -a "$CONFIG_FILE"
+    fi
+    sudo systemctl restart httpd
+fi
+
+
 ##############################
 # Global Settings & Traps
 ##############################
@@ -958,7 +981,7 @@ upgrade_system() {
 uninstall_components() {
     log_info "Preparing to uninstall components..."
 
-    # List of packages includes phpMyAdmin for removal
+    # List of packages includes for removal
     local PACKAGES_TO_REMOVE=( \
         "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" \
         "mysql-server" "mariadb-server" "percona-server-server" "postgresql" \
@@ -968,7 +991,7 @@ uninstall_components() {
     )
     log_info "Packages to be removed: ${PACKAGES_TO_REMOVE[*]}"
 
-    # List of directories, now including phpMyAdmin config/data locations
+    # List of directories for removal
     local DIRS_TO_REMOVE=( \
         "/etc/apache2" "/etc/nginx" "/etc/caddy" "${DOC_ROOT}" "/etc/php" \
         "/etc/mysql" "/etc/postgresql" "/etc/letsencrypt" "/etc/fail2ban" \
