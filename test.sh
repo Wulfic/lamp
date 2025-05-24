@@ -257,13 +257,13 @@ best_php_version() {
             echo "${version:-8.2}"
             ;;
 			linuxmint)
-            for ver in 8.1 8.0 7.4; do
+            for ver in 8.1 8.0; do
                 if dnf list available php | grep -E "^\s*php-${ver}\b" &>/dev/null; then
                     version="$ver"
                     break
                 fi
             done
-            echo "${version:-7.4}"
+            echo "${version:-8.1}"
             ;;
         centos|rocky|almalinux|rhel)
             for ver in 8.2 8.1 8.0; do
