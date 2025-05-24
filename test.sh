@@ -630,6 +630,12 @@ EOF
         sudo systemctl reload nginx
     elif [[ "${WEB_SERVER}" == "Apache" ]]; then
         sudo a2enmod http2 deflate
+		# -----------------------------------------------------------------------------
+		# Apache Module Example: Enable mod_rewrite
+		# -----------------------------------------------------------------------------
+		# If your script previously simply did: sudo a2enmod rewrite
+		# Replace it with a call to our new function:
+		enable_apache_module "deflate"
         sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
         sudo systemctl restart apache2
     fi
@@ -862,30 +868,6 @@ EOF
 }
 
 
-# Conditionals
-# Function to check for command existence
-#command_exists() {
-#    command -v "$1" >/dev/null 2>&1
-#}
-#
-#if command_exists a2enmod; then
-#    # Debian/Ubuntu system
-#    echo "Using a2enmod to enable modules..."
-#    sudo a2enmod rewrite
-#    sudo systemctl reload apache2
-#else
-#    # Likely a RHEL-based system (Rocky Linux, CentOS, etc.)
-#    echo "Detected non-Debian system. Enabling rewrite module manually..."
-#    CONFIG_FILE="/etc/httpd/conf.modules.d/00-base.conf"
-#    # Check if the LoadModule line for rewrite is already present
-#    if ! sudo grep -q "LoadModule rewrite_module" "$CONFIG_FILE"; then
-#        echo "LoadModule rewrite_module modules/mod_rewrite.so" | sudo tee -a "$CONFIG_FILE"
-#    fi
-#    sudo systemctl restart httpd
-#fi
-
-
-
 # -----------------------------------------------------------------------------
 # Function: Enable Apache Modules
 # -----------------------------------------------------------------------------
@@ -967,7 +949,8 @@ install_phpmyadmin() {
 # -----------------------------------------------------------------------------
 # If your script previously simply did: sudo a2enmod rewrite
 # Replace it with a call to our new function:
-enable_apache_module "rewrite"
+# enable_apache_module "rewrite"
+
 
 # Upgrade system and reconfigure services.
 upgrade_system() {
