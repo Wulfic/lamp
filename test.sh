@@ -727,101 +727,289 @@ EOF
 # Security hardening for PHP and SSH.
 security_harden() {
     log_info "Starting security hardening procedures..."
+
+    # Harden PHP configuration
     local PHP_INI
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
     if [[ -f "$PHP_INI" ]]; then
         sudo cp "$PHP_INI" "${PHP_INI}.sec.bak"
         sudo sed -i 's/expose_php = On/expose_php = Off/' "$PHP_INI"
         sudo sed -i 's/display_errors = On/display_errors = Off/' "$PHP_INI"
-        if ! grep -q "disable_functions" "$PHP_INI"; then
-            echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source" | sudo tee -a "$PHP_INI"
+        if ! grep -q "^disable_functions" "$PHP_INI"; then
+            # Expanded the function list for tighter security
+            echo "disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_exec,curl_multi_exec,parse_ini_file,show_source,eval,dl,pcntl_exec" | sudo tee -a "$PHP_INI"
         fi
+        # Set secure file permissions
+        sudo chmod 644 "$PHP_INI"
+        sudo chown root:root "$PHP_INI"
+    else
+        log_info "PHP configuration file not found; skipping PHP hardening."
     fi
 
+    # Harden SSH configuration if requested
     if [[ "${USE_HARDENED_SSH:-false}" == true ]]; then
         harden_ssh_config
     else
         log_info "Standard SSH configuration applied."
     fi
 
+    # Configure automatic updates based on the OS
     if is_debian; then
+        # For Ubuntu and Debian systems: unattended-upgrades is typically used.
         pkg_install unattended-upgrades
         sudo dpkg-reconfigure -plow unattended-upgrades || true
+        log_info "Automatic updates configured via unattended-upgrades (Ubuntu/Debian)."
+    elif [[ -f /etc/redhat-release || -f /etc/fedora-release ]]; then
+        # For RedHat-based systems such as CentOS, Rocky Linux, AlmaLinux, Fedora, and RHEL
+        if command -v dnf >/dev/null; then
+            pkg_install dnf-automatic
+            sudo systemctl enable --now dnf-automatic.timer || true
+            log_info "Automatic updates configured via dnf-automatic (Modern RedHat-based system)."
+        else
+            pkg_install yum-cron
+            sudo systemctl enable --now yum-cron || true
+            log_info "Automatic updates configured via yum-cron (Legacy RedHat-based system)."
+        fi
     else
-        log_info "Skipping unattended-upgrades reconfiguration on non-Debian system."
+        log_info "Automatic updates configuration not supported for your OS."
     fi
+
+    # Ensure fail2ban service is active for brute-force prevention
+    sudo systemctl enable --now fail2ban || true
     sudo systemctl restart fail2ban
     log_info "Security hardening complete."
 }
 
+
 # Harden SSH configuration
 harden_ssh_config() {
     log_info "Applying hardened SSH configuration..."
-    if [[ -f /etc/ssh/sshd_config ]]; then
-        sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.sshhardening.bak
-        if ! grep -q "^Protocol" /etc/ssh/sshd_config; then
-            echo "Protocol 2" | sudo tee -a /etc/ssh/sshd_config
-        else
-            sudo sed -i 's/^Protocol.*/Protocol 2/' /etc/ssh/sshd_config
-        fi
-        sudo sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*Port.*/Port 2222/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*X11Forwarding.*/X11Forwarding no/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*AllowAgentForwarding.*/AllowAgentForwarding no/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*PermitEmptyPasswords.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/' /etc/ssh/sshd_config
-        sudo sed -i 's/^#*LoginGraceTime.*/LoginGraceTime 30/' /etc/ssh/sshd_config
-        if ! grep -q "^Ciphers" /etc/ssh/sshd_config; then
-            echo "Ciphers aes256-ctr,aes192-ctr,aes128-ctr" | sudo tee -a /etc/ssh/sshd_config
-        fi
-        if ! grep -q "^MACs" /etc/ssh/sshd_config; then
-            echo "MACs hmac-sha2-512,hmac-sha2-256" | sudo tee -a /etc/ssh/sshd_config
-        fi
-        if ! grep -q "^KexAlgorithms" /etc/ssh/sshd_config; then
-            echo "KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256" | sudo tee -a /etc/ssh/sshd_config
-        fi
-        if [[ -n "${SSH_ALLOWED_USERS:-}" ]]; then
-            sudo sed -i "s/^#*AllowUsers.*/AllowUsers ${SSH_ALLOWED_USERS}/" /etc/ssh/sshd_config
-        fi
-        sudo systemctl reload sshd
-        log_info "Hardened SSH configuration applied."
-    else
+    
+    local SSH_CONFIG="/etc/ssh/sshd_config"
+    local TIMESTAMP
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    
+    if [[ ! -f "$SSH_CONFIG" ]]; then
         log_info "SSH configuration file not found; skipping SSH hardening."
+        return 1
     fi
+
+    # Backup current configuration with a timestamp
+    sudo cp "$SSH_CONFIG" "${SSH_CONFIG}.bak.${TIMESTAMP}" || {
+        log_info "Backup failed; aborting SSH hardening."
+        return 1
+    }
+    
+    # Change or insert a value in the config file:
+    set_config() {
+        local key="$1"
+        local value="$2"
+        if grep -q "^${key}" "$SSH_CONFIG"; then
+            sudo sed -i "s/^#*${key}.*/${key} ${value}/" "$SSH_CONFIG"
+        else
+            echo "${key} ${value}" | sudo tee -a "$SSH_CONFIG" > /dev/null
+        fi
+    }
+    
+    # Define configuration settings as key-value pairs
+    declare -A settings=(
+        ["Protocol"]="2"
+        ["PermitRootLogin"]="no"
+        ["PasswordAuthentication"]="no"
+        ["Port"]="2222"
+        ["X11Forwarding"]="no"
+        ["AllowAgentForwarding"]="no"
+        ["PermitEmptyPasswords"]="no"
+        ["ClientAliveInterval"]="300"
+        ["ClientAliveCountMax"]="2"
+        ["LoginGraceTime"]="30"
+    )
+    
+    # Apply each configuration setting
+    for key in "${!settings[@]}"; do
+        set_config "$key" "${settings[$key]}"
+    done
+
+    # Append cryptographic settings if they don't exist
+    if ! grep -q "^Ciphers" "$SSH_CONFIG"; then
+        echo "Ciphers aes256-ctr,aes192-ctr,aes128-ctr" | sudo tee -a "$SSH_CONFIG" > /dev/null
+    fi
+    if ! grep -q "^MACs" "$SSH_CONFIG"; then
+        echo "MACs hmac-sha2-512,hmac-sha2-256" | sudo tee -a "$SSH_CONFIG" > /dev/null
+    fi
+    if ! grep -q "^KexAlgorithms" "$SSH_CONFIG"; then
+        echo "KexAlgorithms curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256" | sudo tee -a "$SSH_CONFIG" > /dev/null
+    fi
+
+    # Optionally set AllowUsers directive if environment variable SSH_ALLOWED_USERS is provided
+    if [[ -n "${SSH_ALLOWED_USERS}" ]]; then
+        set_config "AllowUsers" "${SSH_ALLOWED_USERS}"
+    fi
+    
+    # Determine the SSH service name based on the operating system
+    local SSH_SERVICE="sshd"  # default
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        case "$ID" in
+            ubuntu|debian)
+                SSH_SERVICE="ssh"
+                ;;
+            centos|rocky|rhel|fedora|almalinux)
+                SSH_SERVICE="sshd"
+                ;;
+            *)
+                SSH_SERVICE="sshd"
+                ;;
+        esac
+    fi
+
+    # Reload the SSH daemon and check for success
+    if sudo systemctl reload "$SSH_SERVICE"; then
+        log_info "SSHD service reloaded successfully."
+    else
+        log_info "Failed to reload SSH service $SSH_SERVICE."
+        return 1
+    fi
+
+    log_info "Hardened SSH configuration applied."
 }
+
 
 # Setup a basic firewall configuration.
 setup_firewall() {
     log_info "Configuring firewall..."
-    if [[ "$FIREWALL" == "ufw" ]] && command -v ufw >/dev/null 2>&1; then
-        sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw allow 2222/tcp
-        sudo ufw enable
-    elif [[ "$FIREWALL" == "firewalld" ]]; then
-        sudo firewall-cmd --permanent --add-service=http
-        sudo firewall-cmd --permanent --add-service=https
-        sudo firewall-cmd --permanent --add-port=2222/tcp
-        sudo firewall-cmd --reload
+
+    # Extract distribution details
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
     else
-        log_info "No firewall setup required or available."
+        log_warn "Cannot detect operating system; /etc/os-release not found."
+        return 1
+    fi
+
+    # Auto-detect the firewall tool if FIREWALL is unset or set to 'auto'
+    if [ -z "$FIREWALL" ] || [ "$FIREWALL" = "auto" ]; then
+        case "$ID" in
+            ubuntu|debian)
+                FIREWALL="ufw"
+                ;;
+            centos|rocky|almalinux|fedora|rhel)
+                FIREWALL="firewalld"
+                ;;
+            *)
+                if echo "$ID_LIKE" | grep -qi 'debian'; then
+                    FIREWALL="ufw"
+                elif echo "$ID_LIKE" | grep -qi 'rhel'; then
+                    FIREWALL="firewalld"
+                else
+                    log_warn "Unsupported distribution ($ID); cannot determine firewall configuration automatically."
+                    return 1
+                fi
+                ;;
+        esac
+    fi
+
+    # Define common ports/services
+    HTTP_PORT=80
+    HTTPS_PORT=443
+    ALT_SSH_PORT=2222
+
+    # Configure firewall according to the chosen tool.
+    if [ "$FIREWALL" = "ufw" ]; then
+        if command -v ufw >/dev/null 2>&1; then
+            sudo ufw allow ${HTTP_PORT}/tcp
+            sudo ufw allow ${HTTPS_PORT}/tcp
+            sudo ufw allow ${ALT_SSH_PORT}/tcp
+            # Enable UFW (auto-confirm if necessary)
+            echo "y" | sudo ufw enable
+            log_info "UFW configured successfully on ${ID}."
+
+            # Verify UFW status
+            UFW_STATUS=$(sudo ufw status | head -n1)
+            if [[ "$UFW_STATUS" == "Status: active" ]]; then
+                log_info "UFW is active. Current UFW rules:"
+                sudo ufw status numbered
+            else
+                log_warn "UFW does not appear to be active. Status: $UFW_STATUS"
+                return 1
+            fi
+        else
+            log_warn "UFW is not installed on this system."
+            return 1
+        fi
+    elif [ "$FIREWALL" = "firewalld" ]; then
+        if command -v firewall-cmd >/dev/null 2>&1; then
+            sudo firewall-cmd --permanent --add-service=http
+            sudo firewall-cmd --permanent --add-service=https
+            sudo firewall-cmd --permanent --add-port=${ALT_SSH_PORT}/tcp
+            sudo firewall-cmd --reload
+            log_info "firewalld configured successfully on ${ID}."
+
+            # Verify firewalld status
+            FIREWALLD_STATE=$(sudo firewall-cmd --state 2>/dev/null)
+            if [ "$FIREWALLD_STATE" == "running" ]; then
+                log_info "firewalld is running. Current firewalld settings:"
+                sudo firewall-cmd --list-all
+            else
+                log_warn "firewalld does not appear to be running. State: $FIREWALLD_STATE"
+                return 1
+            fi
+        else
+            log_warn "firewall-cmd is not installed on this system."
+            return 1
+        fi
+    else
+        log_warn "Unsupported firewall configuration: $FIREWALL"
+        return 1
     fi
 }
+
 
 # Setup SSH deployment user if requested.
 setup_ssh_deployment() {
     log_info "Setting up SSH deployment environment..."
-    pkg_install openssh-server
+
+    # Install openssh-server using the available package manager.
+    if command -v apt-get >/dev/null; then
+        sudo apt-get update -qq && sudo apt-get install -y openssh-server || { log_error "Failed to install openssh-server via apt-get"; return 1; }
+    elif command -v dnf >/dev/null; then
+        sudo dnf install -y openssh-server || { log_error "Failed to install openssh-server via dnf"; return 1; }
+    elif command -v yum >/dev/null; then
+        sudo yum install -y openssh-server || { log_error "Failed to install openssh-server via yum"; return 1; }
+    else
+        log_error "Unsupported package manager. Please install openssh-server manually."
+        return 1
+    fi
+
+    # Proceed only if SETUP_SSH_DEPLOY is explicitly set to true.
     if [[ "${SETUP_SSH_DEPLOY:-false}" == true ]]; then
         read -p "Enter deployment username (default: deploy): " DEPLOY_USER
         DEPLOY_USER=${DEPLOY_USER:-deploy}
+
         if id "$DEPLOY_USER" &>/dev/null; then
             log_info "User ${DEPLOY_USER} already exists."
         else
-            sudo adduser --disabled-password --gecos "" "$DEPLOY_USER"
-            sudo usermod -aG sudo "$DEPLOY_USER"
+            # Source OS information for distribution-specific actions.
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release
+            fi
+
+            # Create the user and add to the proper admin group.
+            if [[ "$ID" == "ubuntu" || "$ID" == "debian" ]]; then
+                sudo adduser --disabled-password --gecos "" "$DEPLOY_USER" || { log_error "Failed to create user ${DEPLOY_USER}"; return 1; }
+                sudo usermod -aG sudo "$DEPLOY_USER"
+            elif [[ "$ID" =~ ^(centos|rocky|almalinux|fedora|rhel)$ ]]; then
+                sudo useradd -m "$DEPLOY_USER" || { log_error "Failed to create user ${DEPLOY_USER}"; return 1; }
+                sudo usermod -aG wheel "$DEPLOY_USER"
+            else
+                # Fallback if OS is not detected.
+                sudo adduser --disabled-password --gecos "" "$DEPLOY_USER" || { log_error "Failed to create user ${DEPLOY_USER}"; return 1; }
+                sudo usermod -aG sudo "$DEPLOY_USER"
+            fi
             log_info "Created deployment user ${DEPLOY_USER}."
         fi
+
+        # Set up the SSH directory and configure the authorized_keys file.
         local DEPLOY_AUTH_DIR="/home/${DEPLOY_USER}/.ssh"
         mkdir -p "$DEPLOY_AUTH_DIR"
         chmod 700 "$DEPLOY_AUTH_DIR"
@@ -835,8 +1023,37 @@ setup_ssh_deployment() {
             log_info "No SSH key provided; skipping key configuration."
         fi
     fi
+
+    # Update SSH configuration to listen on port 2222.
+    # Determine the proper SSH service name based on the OS.
+    local ssh_service="sshd"
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        if [[ "$ID" == "ubuntu" || "$ID" == "debian" ]]; then
+            ssh_service="ssh"
+        fi
+    fi
+
+    local ssh_config="/etc/ssh/sshd_config"
+    # Create a backup of the original configuration if one doesn't exist.
+    if [ ! -f "${ssh_config}.bak" ]; then
+        sudo cp "$ssh_config" "${ssh_config}.bak"
+    fi
+
+    if grep -q "^#Port 22" "$ssh_config"; then
+        sudo sed -i 's/^#Port 22/Port 2222/' "$ssh_config"
+    elif grep -q "^Port 22" "$ssh_config"; then
+        sudo sed -i 's/^Port 22/Port 2222/' "$ssh_config"
+    else
+        echo "Port 2222" | sudo tee -a "$ssh_config" >/dev/null
+    fi
+
+    # Restart the SSH service using the proper service name.
+    sudo systemctl restart "$ssh_service" || { log_error "Failed to restart SSH service (${ssh_service})"; return 1; }
+
     log_info "SSH deployment setup complete. SSH now set to listen on port 2222."
 }
+
 
 # Generate Docker Compose file.
 generate_docker_compose() {
