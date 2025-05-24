@@ -2,28 +2,6 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# Conditionals
-# Function to check for command existence
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
-if command_exists a2enmod; then
-    # Debian/Ubuntu system
-    echo "Using a2enmod to enable modules..."
-    sudo a2enmod rewrite
-    sudo systemctl reload apache2
-else
-    # Likely a RHEL-based system (Rocky Linux, CentOS, etc.)
-    echo "Detected non-Debian system. Enabling rewrite module manually..."
-    CONFIG_FILE="/etc/httpd/conf.modules.d/00-base.conf"
-    # Check if the LoadModule line for rewrite is already present
-    if ! sudo grep -q "LoadModule rewrite_module" "$CONFIG_FILE"; then
-        echo "LoadModule rewrite_module modules/mod_rewrite.so" | sudo tee -a "$CONFIG_FILE"
-    fi
-    sudo systemctl restart httpd
-fi
-
 
 ##############################
 # Global Settings & Traps
@@ -882,6 +860,31 @@ generate_ansible_playbook() {
 EOF
     log_info "Ansible playbook generated: site.yml"
 }
+
+
+# Conditionals
+# Function to check for command existence
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+if command_exists a2enmod; then
+    # Debian/Ubuntu system
+    echo "Using a2enmod to enable modules..."
+    sudo a2enmod rewrite
+    sudo systemctl reload apache2
+else
+    # Likely a RHEL-based system (Rocky Linux, CentOS, etc.)
+    echo "Detected non-Debian system. Enabling rewrite module manually..."
+    CONFIG_FILE="/etc/httpd/conf.modules.d/00-base.conf"
+    # Check if the LoadModule line for rewrite is already present
+    if ! sudo grep -q "LoadModule rewrite_module" "$CONFIG_FILE"; then
+        echo "LoadModule rewrite_module modules/mod_rewrite.so" | sudo tee -a "$CONFIG_FILE"
+    fi
+    sudo systemctl restart httpd
+fi
+
+
 
 # -----------------------------------------------------------------------------
 # Function: Enable Apache Modules
