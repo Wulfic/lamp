@@ -235,13 +235,12 @@ enable_epel_and_powertools() {
     fi
 }
 
-# Return best PHP version available for the distro.
 best_php_version() {
     local version=""
     case "$DISTRO" in
-        ubuntu|debian|linuxmint)
+        ubuntu|debian)
             for ver in 8.2 8.1 8.0; do
-                if apt-cache show php"${ver}" >/dev/null 2>&1; then
+                if apt-cache show php"${ver}" &>/dev/null; then
                     version="$ver"
                     break
                 fi
@@ -250,16 +249,25 @@ best_php_version() {
             ;;
         fedora)
             for ver in 8.2 8.1 8.0; do
-                if dnf info php | grep -E -q "Version\s*:\s*${ver}\b"; then
+                if dnf list available php | grep -E "^\s*php-${ver}\b" &>/dev/null; then
                     version="$ver"
                     break
                 fi
             done
             echo "${version:-8.2}"
             ;;
+			linuxmint)
+            for ver in 8.1 8.0 7.4; do
+                if dnf list available php | grep -E "^\s*php-${ver}\b" &>/dev/null; then
+                    version="$ver"
+                    break
+                fi
+            done
+            echo "${version:-7.4}"
+            ;;
         centos|rocky|almalinux|rhel)
             for ver in 8.2 8.1 8.0; do
-                if dnf module info php:remi-"${ver}" &>/dev/null; then
+                if dnf module list php | grep -E "remi-${ver}\b" &>/dev/null; then
                     version="$ver"
                     break
                 fi
@@ -271,6 +279,7 @@ best_php_version() {
             ;;
     esac
 }
+
 
 # PHP Installation
 install_php() {
