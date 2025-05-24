@@ -984,7 +984,7 @@ upgrade_system() {
 uninstall_components() {
     log_info "Preparing to uninstall components..."
 
-    # List of packages includes for removal
+    # List of packages includes for removal. Note the lower-case "phpmyadmin"
     local PACKAGES_TO_REMOVE=( \
         "apache2" "apache2-utils" "nginx" "caddy" "lighttpd" \
         "mysql-server" "mariadb-server" "percona-server-server" "postgresql" \
@@ -992,6 +992,12 @@ uninstall_components() {
         "certbot" "${FIREWALL}" "vsftpd" "unattended-upgrades" "fail2ban" \
         "redis-server" "rabbitmq-server" \
     )
+
+    # For RPM-based systems (CentOS, RHEL, Rocky Linux, AlmaLinux), phpMyAdmin may be installed with different case.
+    if [[ "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ]]; then
+        PACKAGES_TO_REMOVE+=( "phpMyAdmin" )
+    fi
+
     log_info "Packages to be removed: ${PACKAGES_TO_REMOVE[*]}"
 
     # List of directories for removal
@@ -1050,6 +1056,7 @@ uninstall_components() {
     fi
     log_info "Uninstallation complete."
 }
+
 
 
 ##############################
