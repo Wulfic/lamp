@@ -889,17 +889,16 @@ harden_ssh_config() {
 }
 
 
-# Setup a basic firewall configuration.
 setup_firewall() {
     log_info "Configuring firewall..."
-	echo "Configuring firewall..."
+    echo "Configuring firewall..."
 
     # Extract distribution details
     if [ -f /etc/os-release ]; then
         . /etc/os-release
     else
         log_warn "Cannot detect operating system; /etc/os-release not found."
-		echo "Cannot detect operating system; /etc/os-release not found."
+        echo "Cannot detect operating system; /etc/os-release not found."
         return 1
     fi
 
@@ -919,7 +918,7 @@ setup_firewall() {
                     FIREWALL="firewalld"
                 else
                     log_warn "Unsupported distribution ($ID); cannot determine firewall configuration automatically."
-					echo "Unsupported distribution ($ID); cannot determine firewall configuration automatically."
+                    echo "Unsupported distribution ($ID); cannot determine firewall configuration automatically."
                     return 1
                 fi
                 ;;
@@ -942,25 +941,31 @@ setup_firewall() {
                 echo "y" | sudo ufw enable
             fi
 
-            # Add firewall rules.
-            sudo ufw allow ${HTTP_PORT}/tcp
-            sudo ufw allow ${HTTPS_PORT}/tcp
-            sudo ufw allow ${ALT_SSH_PORT}/tcp
+            # Add firewall rules only if they are not already defined.
+            if ! sudo ufw status | grep -q "${HTTP_PORT}/tcp"; then
+                sudo ufw allow ${HTTP_PORT}/tcp
+            fi
+            if ! sudo ufw status | grep -q "${HTTPS_PORT}/tcp"; then
+                sudo ufw allow ${HTTPS_PORT}/tcp
+            fi
+            if ! sudo ufw status | grep -q "${ALT_SSH_PORT}/tcp"; then
+                sudo ufw allow ${ALT_SSH_PORT}/tcp
+            fi
 
             # Verify UFW status.
             UFW_STATUS=$(sudo ufw status | head -n1)
             if [[ "$UFW_STATUS" == "Status: active" ]]; then
                 log_info "UFW configured successfully on ${ID}."
-				echo "UFW configured successfully on ${ID}."
+                echo "UFW configured successfully on ${ID}."
                 sudo ufw status numbered
             else
                 log_warn "UFW does not appear to be active. Status: $UFW_STATUS"
-				echo "UFW does not appear to be active. Status: $UFW_STATUS"
+                echo "UFW does not appear to be active. Status: $UFW_STATUS"
                 return 1
             fi
         else
             log_warn "UFW is not installed on this system."
-			echo "UFW is not installed on this system."
+            echo "UFW is not installed on this system."
             return 1
         fi
     elif [ "$FIREWALL" = "firewalld" ]; then
@@ -970,43 +975,51 @@ setup_firewall() {
                 FIREWALLD_STATE=$(sudo systemctl is-active firewalld)
                 if [ "$FIREWALLD_STATE" != "active" ]; then
                     log_info "firewalld is not active. Starting firewalld..."
-					echo "firewalld is not active. Starting firewalld..."
+                    echo "firewalld is not active. Starting firewalld..."
                     sudo systemctl start firewalld
+                    sudo systemctl enable firewalld
+                    # Log additional status information.
+                    FIREWALLD_STATUS_LOG=$(sudo systemctl status firewalld | grep "Active:" | head -n1)
+                    log_info "firewalld status after start: $FIREWALLD_STATUS_LOG"
+                    echo "firewalld status after start: $FIREWALLD_STATUS_LOG"
                 fi
             fi
 
-            # Add firewall rules.
+            # Add firewall rules using permanent configuration.
+            if ! sudo firewall-cmd --list-ports | grep -q "${ALT_SSH_PORT}/tcp"; then
+                sudo firewall-cmd --permanent --add-port=${ALT_SSH_PORT}/tcp
+            fi
             sudo firewall-cmd --permanent --add-service=http
             sudo firewall-cmd --permanent --add-service=https
-            sudo firewall-cmd --permanent --add-port=${ALT_SSH_PORT}/tcp
 
             # Reload firewalld rules.
             sudo firewall-cmd --reload
             log_info "firewalld configured successfully on ${ID}."
-			echo "firewalld configured successfully on ${ID}."
+            echo "firewalld configured successfully on ${ID}."
 
-            # Verify firewalld state.
+            # Verify firewalld state, accepting both "running" and "active" as valid.
             FIREWALLD_STATE=$(sudo firewall-cmd --state 2>/dev/null)
-            if [ "$FIREWALLD_STATE" == "running" ]; then
+            if [ "$FIREWALLD_STATE" == "running" ] || [ "$FIREWALLD_STATE" == "active" ]; then
                 log_info "firewalld is running. Current firewalld settings:"
-				echo "firewalld is running. Current firewalld settings:"
+                echo "firewalld is running. Current firewalld settings:"
                 sudo firewall-cmd --list-all
             else
                 log_warn "firewalld does not appear to be running. State: $FIREWALLD_STATE"
-				echo "firewalld does not appear to be running. State: $FIREWALLD_STATE"
+                echo "firewalld does not appear to be running. State: $FIREWALLD_STATE"
                 return 1
             fi
         else
             log_warn "firewall-cmd is not installed on this system."
-			echo "firewall-cmd is not installed on this system."
+            echo "firewall-cmd is not installed on this system."
             return 1
         fi
     else
         log_warn "Unsupported firewall configuration: $FIREWALL"
-		echo "Unsupported firewall configuration: $FIREWALL"
+        echo "Unsupported firewall configuration: $FIREWALL"
         return 1
     fi
 }
+
 
 
 
