@@ -150,25 +150,44 @@ prepare_docroot() {
 
 pkg_install() {
     local pkgs=("$@")
+    log_info "Installing packages: ${pkgs[*]} on distro: ${DISTRO}"
     local pkg_manager
     pkg_manager=$(get_package_manager)
 
-    if [[ -z "$pkg_manager" ]]; then
-        log_error "No suitable package manager found on ${DISTRO}."
-        return 2
-    fi
-
-    log_info "Installing packages: ${pkgs[*]} using ${pkg_manager} on ${DISTRO}"
-
-    if ! sudo "$pkg_manager" install -y "${pkgs[@]}"; then
-        log_error "Installation failed for packages: ${pkgs[*]} via ${pkg_manager}"
-        return 2
-    fi
-
-    log_info "Installation successful for packages: ${pkgs[*]}"
-    return 0
+    case "$DISTRO" in
+        ubuntu|debian|linuxmint)
+            if ! sudo apt-get install -y "${pkgs[@]}"; then
+                log_error "Installation failed for packages: ${pkgs[*]} via apt-get."
+                exit 2
+            fi
+            ;;
+        centos|rhel|rocky|almalinux)
+            if ! sudo dnf install -y "${pkgs[@]}"; then
+                log_error "Installation failed for packages: ${pkgs[*]} via dnf."
+                exit 2
+            fi
+            ;;
+        fedora)
+            if ! sudo dnf install -y "${pkgs[@]}"; then
+                log_error "Installation failed for packages: ${pkgs[*]} via dnf on Fedora."
+                exit 2
+            fi
+            ;;
+        *)
+            log_error "Using fallback installation method on unknown distro: ${DISTRO}"
+            if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get install -y "${pkgs[@]}"
+            elif command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y "${pkgs[@]}"
+            elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y "${pkgs[@]}"
+            else
+                log_error "Failed to install packages: ${pkgs[*]}. No known package manager available."
+                exit 2
+            fi
+            ;;
+    esac
 }
-
 
 pkg_update() {
     log_info "Updating system on $DISTRO..."
@@ -235,12 +254,13 @@ enable_epel_and_powertools() {
     fi
 }
 
+# Return best PHP version available for the distro.
 best_php_version() {
     local version=""
     case "$DISTRO" in
-        ubuntu|debian)
-            for ver in 8.2 8.1 8.0; do
-                if apt-cache show php"${ver}" &>/dev/null; then
+        ubuntu|debian|linuxmint)
+            for ver in 8.3 8.2 8.1 8.0; do
+                if apt-cache show php"${ver}" >/dev/null 2>&1; then
                     version="$ver"
                     break
                 fi
@@ -248,26 +268,17 @@ best_php_version() {
             echo "${version:-7.4}"
             ;;
         fedora)
-            for ver in 8.2 8.1 8.0; do
-                if dnf list available php | grep -E "^\s*php-${ver}\b" &>/dev/null; then
+            for ver in 8.3 8.2 8.1 8.0; do
+                if dnf info php | grep -E -q "Version\s*:\s*${ver}\b"; then
                     version="$ver"
                     break
                 fi
             done
             echo "${version:-8.2}"
             ;;
-			linuxmint)
-            for ver in 8.1 8.0; do
-                if dnf list available php | grep -E "^\s*php-${ver}\b" &>/dev/null; then
-                    version="$ver"
-                    break
-                fi
-            done
-            echo "${version:-8.1}"
-            ;;
         centos|rocky|almalinux|rhel)
-            for ver in 8.2 8.1 8.0; do
-                if dnf module list php | grep -E "remi-${ver}\b" &>/dev/null; then
+            for ver in 8.3 8.2 8.1 8.0; do
+                if dnf module info php:remi-"${ver}" &>/dev/null; then
                     version="$ver"
                     break
                 fi
@@ -279,7 +290,6 @@ best_php_version() {
             ;;
     esac
 }
-
 
 # PHP Installation
 install_php() {
