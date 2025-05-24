@@ -872,21 +872,14 @@ EOF
 # Function: Enable Apache Modules
 # -----------------------------------------------------------------------------
 enable_apache_module() {
-  local module=$1
-  if [[ "$DISTRO_ID" == "debian" || "$DISTRO_ID" == "ubuntu" ]]; then
-    echo "Enabling $module using a2enmod..."
-    sudo a2enmod "$module"
+  local module="$1"
+  if [ -f /etc/redhat-release ]; then
+    echo "RHEL-based system detected; restarting Apache using httpd..."
+    sudo systemctl restart httpd
   else
-    echo "Rocky Linux detected: Skipping a2enmod for module $module."
-    # Optionally, try to uncomment the LoadModule line (if it exists) in Apache's config
-    # Adjust the file below to match your Apache configuration file if needed.
-    local conf_file="/etc/httpd/conf.modules.d/00-base.conf"
-    if [ -f "$conf_file" ]; then
-      sudo sed -i "/LoadModule ${module}_module/ s/^#//" "$conf_file"
-      echo "$module should now be enabled in $conf_file."
-    else
-      echo "Warning: Apache configuration file not found; please ensure $module is loaded manually."
-    fi
+    echo "Debian-based system detected; enabling module ${module} with a2enmod..."
+    sudo a2enmod "$module"
+    sudo systemctl reload apache2
   fi
 }
 
