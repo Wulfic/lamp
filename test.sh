@@ -629,13 +629,13 @@ EOF
         fi
         sudo systemctl reload nginx
     elif [[ "${WEB_SERVER}" == "Apache" ]]; then
-        sudo a2enmod http2 deflate
+        #sudo a2enmod http2 deflate
 		# -----------------------------------------------------------------------------
 		# Apache Module Example: Enable mod_rewrite
 		# -----------------------------------------------------------------------------
 		# If your script previously simply did: sudo a2enmod rewrite
 		# Replace it with a call to our new function:
-		enable_apache_module "deflate"
+		enable_apache_module "deflate" "http2"
         sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
         sudo systemctl restart apache2
     fi
