@@ -258,7 +258,7 @@ enable_epel_and_powertools() {
 best_php_version() {
     local version=""
     case "$DISTRO" in
-        ubuntu|debian)
+        ubuntu|debian|linuxmint)
             for ver in 8.2 8.1 8.0; do
                 if apt-cache show php"${ver}" >/dev/null 2>&1; then
                     version="$ver"
