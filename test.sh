@@ -961,12 +961,12 @@ setup_firewall() {
             else
                 log_warn "UFW does not appear to be active. Status: $UFW_STATUS"
                 echo "UFW does not appear to be active. Status: $UFW_STATUS"
-                return 1
+                return 0
             fi
         else
             log_warn "UFW is not installed on this system."
             echo "UFW is not installed on this system."
-            return 1
+            return 0
         fi
     elif [ "$FIREWALL" = "firewalld" ]; then
         if command -v firewall-cmd >/dev/null 2>&1; then
@@ -1006,17 +1006,17 @@ setup_firewall() {
             else
                 log_warn "firewalld does not appear to be running. State: $FIREWALLD_STATE"
                 echo "firewalld does not appear to be running. State: $FIREWALLD_STATE"
-                return 1
+                return 0
             fi
         else
             log_warn "firewall-cmd is not installed on this system."
             echo "firewall-cmd is not installed on this system."
-            return 1
+            return 0
         fi
     else
         log_warn "Unsupported firewall configuration: $FIREWALL"
         echo "Unsupported firewall configuration: $FIREWALL"
-        return 1
+        return 0
     fi
 }
 
