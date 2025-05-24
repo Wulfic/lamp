@@ -893,7 +893,7 @@ setup_firewall() {
     log_info "Configuring firewall..."
     echo "Configuring firewall..."
 
-    # Extract distribution details
+    # Extract distribution details.
     if [ -f /etc/os-release ]; then
         . /etc/os-release
     else
@@ -925,7 +925,7 @@ setup_firewall() {
         esac
     fi
 
-    # Define common ports/services
+    # Define common ports/services.
     HTTP_PORT=80
     HTTPS_PORT=443
     ALT_SSH_PORT=2222
@@ -937,7 +937,6 @@ setup_firewall() {
             UFW_STATUS=$(sudo ufw status | head -n1)
             if [ "$UFW_STATUS" != "Status: active" ]; then
                 log_info "UFW is not active. Enabling UFW..."
-                # Enabling ufw will start the service and load the current rules.
                 echo "y" | sudo ufw enable
             fi
 
@@ -961,13 +960,14 @@ setup_firewall() {
             else
                 log_warn "UFW does not appear to be active. Status: $UFW_STATUS"
                 echo "UFW does not appear to be active. Status: $UFW_STATUS"
-                return 0
+                return 1
             fi
         else
             log_warn "UFW is not installed on this system."
             echo "UFW is not installed on this system."
-            return 0
+            return 1
         fi
+
     elif [ "$FIREWALL" = "firewalld" ]; then
         if command -v firewall-cmd >/dev/null 2>&1; then
             # Start firewalld if not already running using systemctl (if available).
@@ -978,7 +978,6 @@ setup_firewall() {
                     echo "firewalld is not active. Starting firewalld..."
                     sudo systemctl start firewalld
                     sudo systemctl enable firewalld
-                    # Log additional status information.
                     FIREWALLD_STATUS_LOG=$(sudo systemctl status firewalld | grep "Active:" | head -n1)
                     log_info "firewalld status after start: $FIREWALLD_STATUS_LOG"
                     echo "firewalld status after start: $FIREWALLD_STATUS_LOG"
@@ -992,8 +991,15 @@ setup_firewall() {
             sudo firewall-cmd --permanent --add-service=http
             sudo firewall-cmd --permanent --add-service=https
 
-            # Reload firewalld rules.
+            # Reload firewalld rules and capture status.
             sudo firewall-cmd --reload
+            RELOAD_STATUS=$?
+            if [ $RELOAD_STATUS -ne 0 ]; then
+                log_warn "firewalld reload failed with exit code $RELOAD_STATUS. This may be due to missing python-nftables support, kernel restrictions, or SELinux policies. Check SELinux status with 'sestatus', install necessary packages (e.g., python3-nftables) or consider switching the backend to iptables in /etc/firewalld/firewalld.conf."
+                echo "firewalld reload failed with exit code $RELOAD_STATUS. Please investigate SELinux, dependencies, or configuration."
+                return 1
+            fi
+
             log_info "firewalld configured successfully on ${ID}."
             echo "firewalld configured successfully on ${ID}."
 
@@ -1006,19 +1012,20 @@ setup_firewall() {
             else
                 log_warn "firewalld does not appear to be running. State: $FIREWALLD_STATE"
                 echo "firewalld does not appear to be running. State: $FIREWALLD_STATE"
-                return 0
+                return 1
             fi
         else
             log_warn "firewall-cmd is not installed on this system."
             echo "firewall-cmd is not installed on this system."
-            return 0
+            return 1
         fi
     else
         log_warn "Unsupported firewall configuration: $FIREWALL"
         echo "Unsupported firewall configuration: $FIREWALL"
-        return 0
+        return 1
     fi
 }
+
 
 
 
