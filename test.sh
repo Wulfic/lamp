@@ -350,46 +350,49 @@ install_database() {
         DB_ENGINE="MariaDB"
     fi
     case "${DB_ENGINE}" in
-        "MariaDB")
-            pkg_install mariadb-server
-            sudo systemctl enable --now mariadb
-            log_info "Configuring MariaDB..."
-            if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
-                sudo mysql <<EOF
+				"MariaDB")
+			pkg_install mariadb-server
+			sudo systemctl enable --now mariadb
+			log_info "Configuring MariaDB..."
+			if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
+				sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
-            else
-                local auth_plugin
-                auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
-                if [[ "$auth_plugin" == "unix_socket" ]]; then
-                    sudo mysql <<EOF
+			else
+				local auth_plugin
+				auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+				if [[ "$auth_plugin" == "unix_socket" || "$auth_plugin" == "auth_socket" ]]; then
+					sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
-                else
-                    if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
-                        read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
-                        echo
-                    fi
-                    if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
-                        sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
+				else
+					if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
+						read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
+						echo
+					fi
+					if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
+						sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
+ALTER USER 'root'@'localhost'
+IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
-                    else
-                        sudo mysql -uroot <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
+					else
+						sudo mysql -uroot <<EOF
+ALTER USER 'root'@'localhost'
+IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
-                    fi
-                fi
-            fi
-            ;;
+					fi
+				fi
+			fi
+			;;
+
         "MySQL")
             pkg_install mysql-server
             sudo systemctl enable --now mysql
