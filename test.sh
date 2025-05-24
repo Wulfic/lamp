@@ -350,7 +350,7 @@ install_database() {
         DB_ENGINE="MariaDB"
     fi
     case "${DB_ENGINE}" in
-				"MariaDB")
+		"MariaDB")
 			pkg_install mariadb-server
 			sudo systemctl enable --now mariadb
 			log_info "Configuring MariaDB..."
