@@ -343,73 +343,96 @@ install_php() {
     fi
 }
 
-# Database installation and initial configuration
 install_database() {
     log_info "Installing database engine: ${DB_ENGINE}"
     if [[ "${DB_ENGINE}" == "MySQL" && ( "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ) ]]; then
         log_info "MySQL not available by default on $DISTRO; switching to MariaDB."
         DB_ENGINE="MariaDB"
     fi
+
+    # Helper to fix package misconfigurations on Debian-based systems.
+    fix_pkg_misconfigs() {
+        log_info "Attempting to fix package misconfigurations with 'apt-get install -f' and 'dpkg --configure -a'."
+        sudo apt-get install -f
+        sudo dpkg --configure -a
+    }
+
+    # Debian-based wrapper for pkg_install.
+    pkg_install_debian() {
+        pkg_install "$@" || { 
+            fix_pkg_misconfigs
+            return 1
+        }
+    }
+
     case "${DB_ENGINE}" in
-		"MariaDB")
-			# On Linux Mint, force reinstallation of mariadb-common to fix its post-install script error
-			if [[ "$DISTRO" == "linuxmint" ]]; then
-				log_info "Detected Linux Mint: Reinstalling mariadb-common to work around post-install script error"
-				sudo DEBIAN_FRONTEND=noninteractive apt-get update
-				sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y mariadb-common || {
-					log_error "Failed to reinstall mariadb-common"
-					return 1
-				}
-				sudo dpkg --configure -a || {
-					log_error "dpkg configuration of mariadb-common still failing"
-					return 1
-				}
-			fi
+        "MariaDB")
+            # On Linux Mint, force reinstallation of mariadb-common to fix its post-install script error
+            if [[ "$DISTRO" == "linuxmint" ]]; then
+                log_info "Detected Linux Mint: Reinstalling mariadb-common to work around post-install script error"
+                sudo DEBIAN_FRONTEND=noninteractive apt-get update
+                sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y mariadb-common || {
+                    log_error "Failed to reinstall mariadb-common"
+                    fix_pkg_misconfigs
+                    return 1
+                }
+                sudo dpkg --configure -a || {
+                    log_error "dpkg configuration of mariadb-common still failing"
+                    fix_pkg_misconfigs
+                    return 1
+                }
+            fi
 
-			pkg_install mariadb-server
-			sudo systemctl enable --now mariadb
-			log_info "Configuring MariaDB..."
-			if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
-				sudo mysql <<EOF
+            if is_debian; then
+                pkg_install_debian mariadb-server || return 1
+            else
+                pkg_install mariadb-server
+            fi
+            sudo systemctl enable --now mariadb
+            log_info "Configuring MariaDB..."
+            if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
+                sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
-			else
-				local auth_plugin
-				auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
-				if [[ "$auth_plugin" == "unix_socket" || "$auth_plugin" == "auth_socket" ]]; then
-					sudo mysql <<EOF
+            else
+                local auth_plugin
+                auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+                if [[ "$auth_plugin" == "unix_socket" || "$auth_plugin" == "auth_socket" ]]; then
+                    sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
 FLUSH PRIVILEGES;
 EOF
-				else
-					if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
-						read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
-						echo
-					fi
-					if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
-						sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
+                else
+                    if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
+                        read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
+                        echo
+                    fi
+                    if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
+                        sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
-					else
-						sudo mysql -uroot <<EOF
+                    else
+                        sudo mysql -uroot <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
-					fi
-				fi
-			fi
-			;;
-
-
+                    fi
+                fi
+            fi
+            ;;
 
         "MySQL")
-            pkg_install mysql-server
+            if is_debian; then
+                pkg_install_debian mysql-server || return 1
+            else
+                pkg_install mysql-server
+            fi
             sudo systemctl enable --now mysql
             sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
@@ -418,15 +441,26 @@ DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
             ;;
+
         "PostgreSQL")
-            pkg_install postgresql postgresql-contrib
+            if is_debian; then
+                pkg_install_debian postgresql postgresql-contrib || return 1
+            else
+                pkg_install postgresql postgresql-contrib
+            fi
             sudo -u postgres psql -c "ALTER USER postgres PASSWORD '${DB_PASSWORD}';"
             ;;
+
         "SQLite")
             log_info "SQLite is file‑based and already comes with PHP support."
             ;;
+
         "Percona")
-            pkg_install percona-server-server
+            if is_debian; then
+                pkg_install_debian percona-server-server || return 1
+            else
+                pkg_install percona-server-server
+            fi
             sudo systemctl enable --now mysql
             sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
@@ -435,12 +469,13 @@ DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
             ;;
+
         "MongoDB")
             if is_debian; then
                 wget -qO - https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/mongodb.gpg >/dev/null
-                echo "deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu $(lsb_release -sc)/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
-                pkg_update
-                pkg_install mongodb-org
+                echo "deb [arch=amd64,arm64 signed-by=/etc/apt/trusted.gpg.d/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu \$(lsb_release -sc)/mongodb-org/6.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+                pkg_update || { fix_pkg_misconfigs; return 1; }
+                pkg_install_debian mongodb-org || return 1
                 sudo systemctl enable --now mongod
             elif is_rpm; then
                 cat <<EOF | sudo tee /etc/yum.repos.d/mongodb-org-6.0.repo
@@ -458,11 +493,13 @@ EOF
                 log_error "MongoDB setup not configured for distro: ${DISTRO}"
             fi
             ;;
+
         "OracleXE")
             log_error "Oracle XE installation requires manual steps. Please refer to Oracle documentation."
             ;;
     esac
 }
+
 
 # Stub function: Setup optional FTP/SFTP server.
 install_ftp_sftp() {
