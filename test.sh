@@ -727,6 +727,7 @@ EOF
 # Security hardening for PHP and SSH.
 security_harden() {
     log_info "Starting security hardening procedures..."
+	echo "Starting security hardening procedures..."
 
     # Harden PHP configuration
     local PHP_INI
@@ -744,6 +745,7 @@ security_harden() {
         sudo chown root:root "$PHP_INI"
     else
         log_info "PHP configuration file not found; skipping PHP hardening."
+		echo "PHP configuration file not found; skipping PHP hardening."
     fi
 
     # Harden SSH configuration if requested
@@ -751,6 +753,7 @@ security_harden() {
         harden_ssh_config
     else
         log_info "Standard SSH configuration applied."
+		echo "Standard SSH configuration applied."
     fi
 
     # Configure automatic updates based on the OS
@@ -759,31 +762,37 @@ security_harden() {
         pkg_install unattended-upgrades
         sudo dpkg-reconfigure -plow unattended-upgrades || true
         log_info "Automatic updates configured via unattended-upgrades (Ubuntu/Debian)."
+		echo "Automatic updates configured via unattended-upgrades (Ubuntu/Debian)."
     elif [[ -f /etc/redhat-release || -f /etc/fedora-release ]]; then
         # For RedHat-based systems such as CentOS, Rocky Linux, AlmaLinux, Fedora, and RHEL
         if command -v dnf >/dev/null; then
             pkg_install dnf-automatic
             sudo systemctl enable --now dnf-automatic.timer || true
             log_info "Automatic updates configured via dnf-automatic (Modern RedHat-based system)."
+			echo "Automatic updates configured via dnf-automatic (Modern RedHat-based system)."
         else
             pkg_install yum-cron
             sudo systemctl enable --now yum-cron || true
             log_info "Automatic updates configured via yum-cron (Legacy RedHat-based system)."
+			echo "Automatic updates configured via yum-cron (Legacy RedHat-based system)."
         fi
     else
         log_info "Automatic updates configuration not supported for your OS."
+		echo "Automatic updates configuration not supported for your OS."
     fi
 
     # Ensure fail2ban service is active for brute-force prevention
     sudo systemctl enable --now fail2ban || true
     sudo systemctl restart fail2ban
     log_info "Security hardening complete."
+	echo "Security hardening complete."
 }
 
 
 # Harden SSH configuration
 harden_ssh_config() {
     log_info "Applying hardened SSH configuration..."
+	echo "Applying hardened SSH configuration..."
     
     local SSH_CONFIG="/etc/ssh/sshd_config"
     local TIMESTAMP
@@ -791,12 +800,14 @@ harden_ssh_config() {
     
     if [[ ! -f "$SSH_CONFIG" ]]; then
         log_info "SSH configuration file not found; skipping SSH hardening."
+		echo "SSH configuration file not found; skipping SSH hardening."
         return 1
     fi
 
     # Backup current configuration with a timestamp
     sudo cp "$SSH_CONFIG" "${SSH_CONFIG}.bak.${TIMESTAMP}" || {
         log_info "Backup failed; aborting SSH hardening."
+		echo "Backup failed; aborting SSH hardening."
         return 1
     }
     
@@ -866,24 +877,29 @@ harden_ssh_config() {
     # Reload the SSH daemon and check for success
     if sudo systemctl reload "$SSH_SERVICE"; then
         log_info "SSHD service reloaded successfully."
+		echo "SSHD service reloaded successfully."
     else
         log_info "Failed to reload SSH service $SSH_SERVICE."
+		echo "Failed to reload SSH service $SSH_SERVICE."
         return 1
     fi
 
     log_info "Hardened SSH configuration applied."
+	echo "Hardened SSH configuration applied."
 }
 
 
 # Setup a basic firewall configuration.
 setup_firewall() {
     log_info "Configuring firewall..."
+	echo "Configuring firewall..."
 
     # Extract distribution details
     if [ -f /etc/os-release ]; then
         . /etc/os-release
     else
         log_warn "Cannot detect operating system; /etc/os-release not found."
+		echo "Cannot detect operating system; /etc/os-release not found."
         return 1
     fi
 
@@ -903,6 +919,7 @@ setup_firewall() {
                     FIREWALL="firewalld"
                 else
                     log_warn "Unsupported distribution ($ID); cannot determine firewall configuration automatically."
+					echo "Unsupported distribution ($ID); cannot determine firewall configuration automatically."
                     return 1
                 fi
                 ;;
@@ -934,13 +951,16 @@ setup_firewall() {
             UFW_STATUS=$(sudo ufw status | head -n1)
             if [[ "$UFW_STATUS" == "Status: active" ]]; then
                 log_info "UFW configured successfully on ${ID}."
+				echo "UFW configured successfully on ${ID}."
                 sudo ufw status numbered
             else
                 log_warn "UFW does not appear to be active. Status: $UFW_STATUS"
+				echo "UFW does not appear to be active. Status: $UFW_STATUS"
                 return 1
             fi
         else
             log_warn "UFW is not installed on this system."
+			echo "UFW is not installed on this system."
             return 1
         fi
     elif [ "$FIREWALL" = "firewalld" ]; then
@@ -950,6 +970,7 @@ setup_firewall() {
                 FIREWALLD_STATE=$(sudo systemctl is-active firewalld)
                 if [ "$FIREWALLD_STATE" != "active" ]; then
                     log_info "firewalld is not active. Starting firewalld..."
+					echo "firewalld is not active. Starting firewalld..."
                     sudo systemctl start firewalld
                 fi
             fi
@@ -962,22 +983,27 @@ setup_firewall() {
             # Reload firewalld rules.
             sudo firewall-cmd --reload
             log_info "firewalld configured successfully on ${ID}."
+			echo "firewalld configured successfully on ${ID}."
 
             # Verify firewalld state.
             FIREWALLD_STATE=$(sudo firewall-cmd --state 2>/dev/null)
             if [ "$FIREWALLD_STATE" == "running" ]; then
                 log_info "firewalld is running. Current firewalld settings:"
+				echo "firewalld is running. Current firewalld settings:"
                 sudo firewall-cmd --list-all
             else
                 log_warn "firewalld does not appear to be running. State: $FIREWALLD_STATE"
+				echo "firewalld does not appear to be running. State: $FIREWALLD_STATE"
                 return 1
             fi
         else
             log_warn "firewall-cmd is not installed on this system."
+			echo "firewall-cmd is not installed on this system."
             return 1
         fi
     else
         log_warn "Unsupported firewall configuration: $FIREWALL"
+		echo "Unsupported firewall configuration: $FIREWALL"
         return 1
     fi
 }
@@ -987,6 +1013,7 @@ setup_firewall() {
 # Setup SSH deployment user if requested.
 setup_ssh_deployment() {
     log_info "Setting up SSH deployment environment..."
+	echo "Setting up SSH deployment environment..."
 
     # Install openssh-server using the available package manager.
     if command -v apt-get >/dev/null; then
@@ -997,6 +1024,7 @@ setup_ssh_deployment() {
         sudo yum install -y openssh-server || { log_error "Failed to install openssh-server via yum"; return 1; }
     else
         log_error "Unsupported package manager. Please install openssh-server manually."
+		echo "Unsupported package manager. Please install openssh-server manually."
         return 1
     fi
 
@@ -1071,12 +1099,14 @@ setup_ssh_deployment() {
     sudo systemctl restart "$ssh_service" || { log_error "Failed to restart SSH service (${ssh_service})"; return 1; }
 
     log_info "SSH deployment setup complete. SSH now set to listen on port 2222."
+	echo "SSH deployment setup complete. SSH now set to listen on port 2222."
 }
 
 
 # Generate Docker Compose file.
 generate_docker_compose() {
     log_info "Generating Docker Compose file..."
+	echo "Generating Docker Compose file..."
     cat <<EOF > docker-compose.yml
 version: '3.8'
 services:
@@ -1229,11 +1259,13 @@ install_phpmyadmin() {
 
     *)
       echo "Unsupported distribution: $distro_id"
+	  log_info "Unsupported distribution: $distro_id"
       return 1
       ;;
   esac
 
   echo "phpMyAdmin installation completed successfully."
+  log_info "phpMyAdmin installation completed successfully."
 }
 
 
