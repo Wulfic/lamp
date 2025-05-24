@@ -88,7 +88,7 @@ init_distro() {
     fi
 
     case "$detected" in
-        ubuntu|debian|centos|rocky|almalinux|fedora|rhel)
+        ubuntu|debian|centos|rocky|almalinux|fedora|rhel|mint)
             DISTRO="$detected"
             ;;
         *)
@@ -115,7 +115,7 @@ get_package_manager() {
 
 # Helper to identify Debian-based distros.
 is_debian() {
-    [[ "$DISTRO" =~ ^(ubuntu|debian)$ ]]
+    [[ "$DISTRO" =~ ^(ubuntu|debian|mint)$ ]]
 }
 
 # Helper to identify RPM-based distros.
@@ -155,7 +155,7 @@ pkg_install() {
     pkg_manager=$(get_package_manager)
 
     case "$DISTRO" in
-        ubuntu|debian)
+        ubuntu|debian|mint)
             if ! sudo apt-get install -y "${pkgs[@]}"; then
                 log_error "Installation failed for packages: ${pkgs[*]} via apt-get."
                 exit 2
@@ -635,7 +635,7 @@ EOF
     ############### Web Server Optimization ##################
     if [[ "${WEB_SERVER}" == "Nginx" ]]; then
         # Adjust configuration based on distribution
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
             # Debian-based systems typically use sites-available
             if [[ -f /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}" ]]; then
                 sudo sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
@@ -655,7 +655,7 @@ EOF
 
     elif [[ "${WEB_SERVER}" == "Apache" ]]; then
         # Apache optimization with OS-specific paths and service names
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
             enable_apache_module "deflate"
             enable_apache_module "http2"
             sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
@@ -673,7 +673,7 @@ EOF
     if [[ "${DB_ENGINE}" == "MySQL" || "${DB_ENGINE}" == "MariaDB" || "${DB_ENGINE}" == "Percona" ]]; then
         local MYSQL_CONF
         # Ubuntu/Debian commonly use /etc/mysql/my.cnf, while RHEL-based systems use /etc/my.cnf
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
             MYSQL_CONF="/etc/mysql/my.cnf"
         else
             MYSQL_CONF="/etc/my.cnf"
@@ -703,7 +703,7 @@ EOF
 
     elif [[ "${DB_ENGINE}" == "PostgreSQL" ]]; then
         local PG_CONF
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
             # Debian-based PostgreSQL location – dynamically locate the version folder
             PG_VERSION_DIR=$(ls /etc/postgresql 2>/dev/null | head -n1)
             PG_CONF="/etc/postgresql/${PG_VERSION_DIR}/main/postgresql.conf"
@@ -975,6 +975,7 @@ setup_firewall() {
             if echo "$ID" | grep -Ei "centos|rocky|almalinux|rhel|fedora" >/dev/null; then
                 if ! python3 -c "import nftables" >/dev/null 2>&1; then
                     log_info "python3-nftables is not installed. Attempting installation..."
+					echo "python3-nftables is not installed. Attempting installation..."
                     echo "Installing python3-nftables..."
                     if command -v dnf >/dev/null 2>&1; then
                         sudo dnf install -y python3-nftables
@@ -1517,7 +1518,7 @@ main() {
 echo ""	
 echo "##########################################################################"
 echo "# Enhanced Multi‑Engine Server Installer & Deployment Script"
-echo "# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, Fedora, and RHEL"
+echo "# Supports Ubuntu, Debian, CentOS, Rocky Linux, AlmaLinux, Fedora, Linux Mint, and RHEL"
 echo "#"
 echo "# This script installs a flexible stack with options for:"
 echo "# • Multiple database engines: MySQL, MariaDB, PostgreSQL, SQLite, Percona, MongoDB, OracleXE"
