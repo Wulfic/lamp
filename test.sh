@@ -88,7 +88,7 @@ init_distro() {
     fi
 
     case "$detected" in
-        ubuntu|debian|centos|rocky|almalinux|fedora|rhel|mint)
+        ubuntu|debian|centos|rocky|almalinux|fedora|rhel|linuxmint)
             DISTRO="$detected"
             ;;
         *)
@@ -115,7 +115,7 @@ get_package_manager() {
 
 # Helper to identify Debian-based distros.
 is_debian() {
-    [[ "$DISTRO" =~ ^(ubuntu|debian|mint)$ ]]
+    [[ "$DISTRO" =~ ^(ubuntu|debian|linuxmint)$ ]]
 }
 
 # Helper to identify RPM-based distros.
@@ -155,7 +155,7 @@ pkg_install() {
     pkg_manager=$(get_package_manager)
 
     case "$DISTRO" in
-        ubuntu|debian|mint)
+        ubuntu|debian|linuxmint)
             if ! sudo apt-get install -y "${pkgs[@]}"; then
                 log_error "Installation failed for packages: ${pkgs[*]} via apt-get."
                 exit 2
@@ -635,7 +635,7 @@ EOF
     ############### Web Server Optimization ##################
     if [[ "${WEB_SERVER}" == "Nginx" ]]; then
         # Adjust configuration based on distribution
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "linuxmint" ]]; then
             # Debian-based systems typically use sites-available
             if [[ -f /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}" ]]; then
                 sudo sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
@@ -655,7 +655,7 @@ EOF
 
     elif [[ "${WEB_SERVER}" == "Apache" ]]; then
         # Apache optimization with OS-specific paths and service names
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "linuxmint" ]]; then
             enable_apache_module "deflate"
             enable_apache_module "http2"
             sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
@@ -673,7 +673,7 @@ EOF
     if [[ "${DB_ENGINE}" == "MySQL" || "${DB_ENGINE}" == "MariaDB" || "${DB_ENGINE}" == "Percona" ]]; then
         local MYSQL_CONF
         # Ubuntu/Debian commonly use /etc/mysql/my.cnf, while RHEL-based systems use /etc/my.cnf
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "linuxmint" ]]; then
             MYSQL_CONF="/etc/mysql/my.cnf"
         else
             MYSQL_CONF="/etc/my.cnf"
@@ -703,7 +703,7 @@ EOF
 
     elif [[ "${DB_ENGINE}" == "PostgreSQL" ]]; then
         local PG_CONF
-        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "mint" ]]; then
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" || "$DISTRO" == "linuxmint" ]]; then
             # Debian-based PostgreSQL location – dynamically locate the version folder
             PG_VERSION_DIR=$(ls /etc/postgresql 2>/dev/null | head -n1)
             PG_CONF="/etc/postgresql/${PG_VERSION_DIR}/main/postgresql.conf"
