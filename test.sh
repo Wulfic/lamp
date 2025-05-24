@@ -970,6 +970,31 @@ setup_firewall() {
 
     elif [ "$FIREWALL" = "firewalld" ]; then
         if command -v firewall-cmd >/dev/null 2>&1; then
+
+            # --- Check and install python3-nftables on RHEL-based distros ---
+            if echo "$ID" | grep -Ei "centos|rocky|almalinux|rhel|fedora" >/dev/null; then
+                if ! python3 -c "import nftables" >/dev/null 2>&1; then
+                    log_info "python3-nftables is not installed. Attempting installation..."
+                    echo "Installing python3-nftables..."
+                    if command -v dnf >/dev/null 2>&1; then
+                        sudo dnf install -y python3-nftables
+                    elif command -v yum >/dev/null 2>&1; then
+                        sudo yum install -y python3-nftables
+                    else
+                        log_warn "No suitable package manager found to install python3-nftables."
+                        echo "No suitable package manager found to install python3-nftables."
+                    fi
+                    if ! python3 -c "import nftables" >/dev/null 2>&1; then
+                        log_warn "Failed to install python3-nftables. Firewall functionality may be affected."
+                        echo "Warning: Failed to install python3-nftables."
+                    else
+                        log_info "python3-nftables installed successfully."
+                        echo "python3-nftables installed successfully."
+                    fi
+                fi
+            fi
+            # --- End of python3-nftables check ---
+
             # Start firewalld if not already running using systemctl (if available).
             if command -v systemctl >/dev/null 2>&1; then
                 FIREWALLD_STATE=$(sudo systemctl is-active firewalld)
@@ -995,7 +1020,7 @@ setup_firewall() {
             sudo firewall-cmd --reload
             RELOAD_STATUS=$?
             if [ $RELOAD_STATUS -ne 0 ]; then
-                log_warn "firewalld reload failed with exit code $RELOAD_STATUS. This may be due to missing python-nftables support, kernel restrictions, or SELinux policies. Check SELinux status with 'sestatus', install necessary packages (e.g., python3-nftables) or consider switching the backend to iptables in /etc/firewalld/firewalld.conf."
+                log_warn "firewalld reload failed with exit code $RELOAD_STATUS. This may be due to missing python3-nftables support, kernel restrictions, or SELinux policies. Check SELinux status with 'sestatus', install necessary packages (e.g., python3-nftables) or consider switching the backend to iptables in /etc/firewalld/firewalld.conf."
                 echo "firewalld reload failed with exit code $RELOAD_STATUS. Please investigate SELinux, dependencies, or configuration."
                 return 1
             fi
@@ -1025,6 +1050,7 @@ setup_firewall() {
         return 1
     fi
 }
+
 
 
 
