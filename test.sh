@@ -597,9 +597,11 @@ EOF
     fi
 }
 
-# Optimize performance (PHP, Web Server, Database tuning)
 optimize_performance() {
     log_info "Optimizing system performance..."
+    echo "optimizing system performance..."
+
+    # PHP configuration adjustments
     local PHP_INI
     PHP_INI=$(php --ini | grep "Loaded Configuration" | awk '{print $4}')
     if [[ -f "$PHP_INI" ]]; then
@@ -622,42 +624,105 @@ EOF
         log_error "PHP configuration file not found at $PHP_INI."
     fi
 
+    # Determine the Linux distribution using /etc/os-release
+    if [[ -f /etc/os-release ]]; then
+        . /etc/os-release
+        DISTRO=$ID
+    else
+        DISTRO="unknown"
+    fi
+
+    ############### Web Server Optimization ##################
     if [[ "${WEB_SERVER}" == "Nginx" ]]; then
-        sudo sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
+        # Adjust configuration based on distribution
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            # Debian-based systems typically use sites-available
+            if [[ -f /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}" ]]; then
+                sudo sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/sites-available/"${DOMAIN_ARRAY[0]}"
+            else
+                log_error "Nginx site configuration /etc/nginx/sites-available/${DOMAIN_ARRAY[0]} not found."
+            fi
+        else
+            # RHEL-based distributions – modify the main config
+            sudo sed -i '/listen 80;/a listen 443 ssl http2;' /etc/nginx/nginx.conf
+        fi
+
+        # Enable Gzip compression if not already set
         if ! grep -q "gzip on;" /etc/nginx/nginx.conf; then
             sudo sed -i 's/http {*/http { \ngzip on;\ngzip_vary on;\ngzip_proxied any;\ngzip_comp_level 6;\ngzip_min_length 256;\ngzip_types text\/plain application\/xml application\/javascript text\/css;/' /etc/nginx/nginx.conf
         fi
         sudo systemctl reload nginx
+
     elif [[ "${WEB_SERVER}" == "Apache" ]]; then
-        #sudo a2enmod http2 deflate
-		# -----------------------------------------------------------------------------
-		# Apache Module Example: Enable mod_rewrite
-		# -----------------------------------------------------------------------------
-		# If your script previously simply did: sudo a2enmod rewrite
-		# Replace it with a call to our new function:
-		enable_apache_module "deflate" "http2"
-        sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
-        sudo systemctl restart apache2
+        # Apache optimization with OS-specific paths and service names
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            enable_apache_module "deflate"
+            enable_apache_module "http2"
+            sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/apache2/apache2.conf
+            sudo systemctl restart apache2
+        else
+            # For RHEL-based systems, Apache is usually installed as httpd
+            enable_apache_module "deflate"
+            enable_apache_module "http2"
+            sudo sed -i 's/Protocols h2 http\/1.1/Protocols h2 http\/1.1/' /etc/httpd/conf/httpd.conf
+            sudo systemctl restart httpd
+        fi
     fi
 
+    ############### Database Tuning ##################
     if [[ "${DB_ENGINE}" == "MySQL" || "${DB_ENGINE}" == "MariaDB" || "${DB_ENGINE}" == "Percona" ]]; then
-        if ! grep -q "innodb_buffer_pool_size" /etc/mysql/my.cnf; then
-            cat <<EOF | sudo tee -a /etc/mysql/my.cnf
+        local MYSQL_CONF
+        # Ubuntu/Debian commonly use /etc/mysql/my.cnf, while RHEL-based systems use /etc/my.cnf
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            MYSQL_CONF="/etc/mysql/my.cnf"
+        else
+            MYSQL_CONF="/etc/my.cnf"
+        fi
+
+        if [[ -f "$MYSQL_CONF" ]]; then
+            if ! grep -q "innodb_buffer_pool_size" "$MYSQL_CONF"; then
+                cat <<EOF | sudo tee -a "$MYSQL_CONF"
 
 [mysqld]
 innodb_buffer_pool_size=256M
 max_connections=150
 thread_cache_size=50
 EOF
+            fi
+            # Restart the appropriate service name (mysql, mariadb, or mysqld)
+            if systemctl is-active --quiet mysql; then
+                sudo systemctl restart mysql
+            elif systemctl is-active --quiet mariadb; then
+                sudo systemctl restart mariadb
+            elif systemctl is-active --quiet mysqld; then
+                sudo systemctl restart mysqld
+            fi
+        else
+            log_error "MySQL configuration file not found at $MYSQL_CONF"
         fi
-        sudo systemctl restart mysql 2>/dev/null || sudo systemctl restart mariadb
+
     elif [[ "${DB_ENGINE}" == "PostgreSQL" ]]; then
-        local PG_CONF="/etc/postgresql/$(ls /etc/postgresql | head -n1)/main/postgresql.conf"
-        sudo sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" "$PG_CONF"
-        sudo sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" "$PG_CONF"
-        sudo systemctl restart postgresql
+        local PG_CONF
+        if [[ "$DISTRO" == "ubuntu" || "$DISTRO" == "debian" ]]; then
+            # Debian-based PostgreSQL location – dynamically locate the version folder
+            PG_VERSION_DIR=$(ls /etc/postgresql 2>/dev/null | head -n1)
+            PG_CONF="/etc/postgresql/${PG_VERSION_DIR}/main/postgresql.conf"
+        else
+            # RHEL-based distributions: default PostgreSQL config location; adjust if your version differs
+            PG_CONF="/var/lib/pgsql/data/postgresql.conf"
+        fi
+
+        if [[ -f "$PG_CONF" ]]; then
+            sudo sed -i "s/#shared_buffers = 128MB/shared_buffers = 256MB/" "$PG_CONF"
+            sudo sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 2GB/" "$PG_CONF"
+            # Attempt to restart PostgreSQL; try an alternative service name if needed
+            sudo systemctl restart postgresql 2>/dev/null || sudo systemctl restart postgresql-12
+        else
+            log_error "PostgreSQL configuration file not found at $PG_CONF"
+        fi
     fi
 }
+
 
 # Security hardening for PHP and SSH.
 security_harden() {
@@ -934,15 +999,6 @@ install_phpmyadmin() {
 
   echo "phpMyAdmin installation completed successfully."
 }
-
-
-
-# -----------------------------------------------------------------------------
-# Apache Module Example: Enable mod_rewrite
-# -----------------------------------------------------------------------------
-# If your script previously simply did: sudo a2enmod rewrite
-# Replace it with a call to our new function:
-# enable_apache_module "rewrite"
 
 
 # Upgrade system and reconfigure services.
