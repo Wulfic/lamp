@@ -191,6 +191,7 @@ pkg_install() {
 
 pkg_update() {
     log_info "Updating system on $DISTRO..."
+	echo "Updating system on $DISTRO..."
     if is_debian; then
         sudo apt-get update && sudo apt-get upgrade -y || { log_error "Update/upgrade failed on Debian-based system."; exit 2; }
     else
@@ -351,6 +352,20 @@ install_database() {
     fi
     case "${DB_ENGINE}" in
 		"MariaDB")
+			# On Linux Mint, force reinstallation of mariadb-common to fix its post-install script error
+			if [[ "$DISTRO" == "linuxmint" ]]; then
+				log_info "Detected Linux Mint: Reinstalling mariadb-common to work around post-install script error"
+				sudo DEBIAN_FRONTEND=noninteractive apt-get update
+				sudo DEBIAN_FRONTEND=noninteractive apt-get install --reinstall -y mariadb-common || {
+					log_error "Failed to reinstall mariadb-common"
+					return 1
+				}
+				sudo dpkg --configure -a || {
+					log_error "dpkg configuration of mariadb-common still failing"
+					return 1
+				}
+			fi
+
 			pkg_install mariadb-server
 			sudo systemctl enable --now mariadb
 			log_info "Configuring MariaDB..."
@@ -378,20 +393,20 @@ EOF
 					fi
 					if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
 						sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
-ALTER USER 'root'@'localhost'
-IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
 					else
 						sudo mysql -uroot <<EOF
-ALTER USER 'root'@'localhost'
-IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
 					fi
 				fi
 			fi
 			;;
+
+
 
         "MySQL")
             pkg_install mysql-server
@@ -865,7 +880,7 @@ harden_ssh_config() {
     if [[ -f /etc/os-release ]]; then
         . /etc/os-release
         case "$ID" in
-            ubuntu|debian)
+            ubuntu|debian|linuxmint)
                 SSH_SERVICE="ssh"
                 ;;
             centos|rocky|rhel|fedora|almalinux)
