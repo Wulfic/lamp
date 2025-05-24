@@ -150,44 +150,25 @@ prepare_docroot() {
 
 pkg_install() {
     local pkgs=("$@")
-    log_info "Installing packages: ${pkgs[*]} on distro: ${DISTRO}"
     local pkg_manager
     pkg_manager=$(get_package_manager)
 
-    case "$DISTRO" in
-        ubuntu|debian|linuxmint)
-            if ! sudo apt-get install -y "${pkgs[@]}"; then
-                log_error "Installation failed for packages: ${pkgs[*]} via apt-get."
-                exit 2
-            fi
-            ;;
-        centos|rhel|rocky|almalinux)
-            if ! sudo dnf install -y "${pkgs[@]}"; then
-                log_error "Installation failed for packages: ${pkgs[*]} via dnf."
-                exit 2
-            fi
-            ;;
-        fedora)
-            if ! sudo dnf install -y "${pkgs[@]}"; then
-                log_error "Installation failed for packages: ${pkgs[*]} via dnf on Fedora."
-                exit 2
-            fi
-            ;;
-        *)
-            log_error "Using fallback installation method on unknown distro: ${DISTRO}"
-            if command -v apt-get >/dev/null 2>&1; then
-                sudo apt-get install -y "${pkgs[@]}"
-            elif command -v dnf >/dev/null 2>&1; then
-                sudo dnf install -y "${pkgs[@]}"
-            elif command -v yum >/dev/null 2>&1; then
-                sudo yum install -y "${pkgs[@]}"
-            else
-                log_error "Failed to install packages: ${pkgs[*]}. No known package manager available."
-                exit 2
-            fi
-            ;;
-    esac
+    if [[ -z "$pkg_manager" ]]; then
+        log_error "No suitable package manager found on ${DISTRO}."
+        return 2
+    fi
+
+    log_info "Installing packages: ${pkgs[*]} using ${pkg_manager} on ${DISTRO}"
+
+    if ! sudo "$pkg_manager" install -y "${pkgs[@]}"; then
+        log_error "Installation failed for packages: ${pkgs[*]} via ${pkg_manager}"
+        return 2
+    fi
+
+    log_info "Installation successful for packages: ${pkgs[*]}"
+    return 0
 }
+
 
 pkg_update() {
     log_info "Updating system on $DISTRO..."
