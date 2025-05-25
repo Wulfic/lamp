@@ -1,4 +1,12 @@
 #!/bin/bash
+
+# Check for Bash version (associative arrays require Bash 4.0+)
+if [[ -z "${BASH_VERSINFO[0]}" || "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+  echo "ERROR: This script requires Bash version 4.0 or higher." >&2
+  echo "You are using Bash version: ${BASH_VERSION:-$(bash --version | head -n1)}" >&2
+  exit 1
+fi
+
 set -euo pipefail
 IFS=$'\n\t'
 
