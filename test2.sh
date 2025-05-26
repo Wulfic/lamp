@@ -792,7 +792,7 @@ EOF
                 echo "$nginx_vhost_content" | sudo tee "/etc/nginx/sites-available/${DOMAIN}" > /dev/null
                 sudo ln -sf "/etc/nginx/sites-available/${DOMAIN}" "/etc/nginx/sites-enabled/"
             fi
-            done
+        done
         sudo systemctl reload nginx
     elif [[ "${WEB_SERVER}" == "Apache" ]]; then
         local VHOST_DIR="" APACHE_LOG_DIR="" RELOAD_CMD="" DISABLE_DEFAULT=""
