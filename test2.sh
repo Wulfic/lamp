@@ -1201,10 +1201,9 @@ harden_ssh_config() {
 setup_firewall() {
     log_info "Configuring firewall..."
 
-    # Extract distribution details.
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-    else
+    # ID and ID_LIKE should be globally available from init_distro
+    # If /etc/os-release was not found or ID is not set, init_distro should have handled it or exited.
+    if [[ -z "${ID:-}" ]]; then
         log_warn "Cannot detect operating system; /etc/os-release not found."
         return 1
     fi
