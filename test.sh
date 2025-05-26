@@ -416,7 +416,7 @@ FLUSH PRIVILEGES;
 EOF
                 else
                     if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
-                        read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
+                        read -s -p "Enter current MariaDB root password (Hint:Same password you setup at the start): " CURRENT_ROOT_PASSWORD
                         echo
                     fi
                     if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
@@ -433,7 +433,7 @@ EOF
                 fi
             else
                 # For MariaDB versions 10.4 and up, use the ALTER USER syntax.
-                if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
+                if [[ $version_major -eq 10 && $version_minor -ge 4 ]]; then
                     sudo mysql <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 DELETE FROM mysql.user WHERE User='';
