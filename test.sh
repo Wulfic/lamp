@@ -345,6 +345,7 @@ install_php() {
 
 install_database() {
     log_info "Installing database engine: ${DB_ENGINE}"
+    echo "Installing database engine: ${DB_ENGINE}"
     if [[ "${DB_ENGINE}" == "MySQL" && ( "$DISTRO" =~ ^(centos|rhel|rocky|almalinux)$ ) ]]; then
         log_info "MySQL not available by default on $DISTRO; switching to MariaDB."
         DB_ENGINE="MariaDB"
@@ -353,13 +354,14 @@ install_database() {
     # Helper to fix package misconfigurations on Debian-based systems.
     fix_pkg_misconfigs() {
         log_info "Attempting to fix package misconfigurations with 'apt-get install -f' and 'dpkg --configure -a'."
+        echo "Attempting to fix package misconfigurations with 'apt-get install -f' and 'dpkg --configure -a'."
         sudo apt-get install -f
         sudo dpkg --configure -a
     }
 
     # Debian-based wrapper for pkg_install.
     pkg_install_debian() {
-        pkg_install "$@" || { 
+        pkg_install "$@" || {
             fix_pkg_misconfigs
             return 1
         }
@@ -367,7 +369,7 @@ install_database() {
 
     case "${DB_ENGINE}" in
         "MariaDB")
-            # On Linux Mint, force reinstallation of mariadb-common to fix its post-install script error
+            # On Linux Mint, force reinstallation of mariadb-common to work around post-install script error.
             if [[ "$DISTRO" == "linuxmint" ]]; then
                 log_info "Detected Linux Mint: Reinstalling mariadb-common to work around post-install script error"
                 sudo DEBIAN_FRONTEND=noninteractive apt-get update
@@ -389,22 +391,27 @@ install_database() {
                 pkg_install mariadb-server
             fi
             sudo systemctl enable --now mariadb
+
+            # Detect the installed MariaDB version to decide which SQL commands to run.
+            local mariadb_version version_major version_minor auth_plugin
+            mariadb_version=$(sudo mysql -N -e "SELECT VERSION();" 2>/dev/null | cut -d'-' -f1)
+            if [[ -z "$mariadb_version" ]]; then
+                log_error "Failed to detect MariaDB version."
+                return 1
+            fi
+            version_major=$(echo "$mariadb_version" | cut -d. -f1)
+            version_minor=$(echo "$mariadb_version" | cut -d. -f2)
+            log_info "Detected MariaDB version: $mariadb_version"
+
             log_info "Configuring MariaDB..."
-            if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
-                sudo mysql <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
-DELETE FROM mysql.user WHERE User='';
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
-FLUSH PRIVILEGES;
-EOF
-            else
-                local auth_plugin
+            if [[ $version_major -eq 10 && $version_minor -lt 4 ]]; then
+                log_info "Older MariaDB version detected (<10.4): Using legacy password configuration."
                 auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
                 if [[ "$auth_plugin" == "unix_socket" || "$auth_plugin" == "auth_socket" ]]; then
                     sudo mysql <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
+SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${DB_PASSWORD}');
 DELETE FROM mysql.user WHERE User='';
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\_%';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
                 else
@@ -414,14 +421,50 @@ EOF
                     fi
                     if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
                         sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
+SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${DB_PASSWORD}');
 FLUSH PRIVILEGES;
 EOF
                     else
                         sudo mysql -uroot <<EOF
+SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${DB_PASSWORD}');
+FLUSH PRIVILEGES;
+EOF
+                    fi
+                fi
+            else
+                # For MariaDB versions 10.4 and up, use the ALTER USER syntax.
+                if [[ "$DISTRO" =~ ^(rocky|almalinux|rhel)$ ]]; then
+                    sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
+EOF
+                else
+                    auth_plugin=$(sudo mysql -N -e "SELECT plugin FROM mysql.user WHERE user='root' AND host='localhost';" 2>/dev/null || echo '')
+                    if [[ "$auth_plugin" == "unix_socket" || "$auth_plugin" == "auth_socket" ]]; then
+                        sudo mysql <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
+DELETE FROM mysql.user WHERE User='';
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+FLUSH PRIVILEGES;
+EOF
+                    else
+                        if [[ -z "${CURRENT_ROOT_PASSWORD:-}" ]]; then
+                            read -s -p "Enter current MariaDB root password (if any, press ENTER if none): " CURRENT_ROOT_PASSWORD
+                            echo
+                        fi
+                        if [[ -n "$CURRENT_ROOT_PASSWORD" ]]; then
+                            sudo mysql -uroot -p"${CURRENT_ROOT_PASSWORD}" <<EOF
 ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
 FLUSH PRIVILEGES;
 EOF
+                        else
+                            sudo mysql -uroot <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${DB_PASSWORD}';
+FLUSH PRIVILEGES;
+EOF
+                        fi
                     fi
                 fi
             fi
@@ -499,6 +542,7 @@ EOF
             ;;
     esac
 }
+
 
 
 # Stub function: Setup optional FTP/SFTP server.
