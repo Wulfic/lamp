@@ -1376,7 +1376,7 @@ install_phpmyadmin() {
   echo "Detected OS: $PRETTY_NAME"
 
   case "$distro_id" in
-    ubuntu|debian)
+    ubuntu|debian|linuxmint)
       echo "Updating package lists..."
       sudo apt-get update -y
       
