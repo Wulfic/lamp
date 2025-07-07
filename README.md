@@ -32,17 +32,17 @@
 
 #
 
-# - Apache and common PHP extensions (gd, curl, mbstring, xml, zip, PDO)
+ - Apache and common PHP extensions (gd, curl, mbstring, xml, zip, PDO)
 
-# - Git and Composer
+ - Git and Composer
 
-# - Node.js and npm
+ - Node.js and npm
 
-# - phpMyAdmin with automated DB and Apache configuration
+ - phpMyAdmin with automated DB and Apache configuration
 
-# - SSL certificate provisioning via Certbot
+ - SSL certificate provisioning via Certbot
 
-# - UFW firewall configuration for SSH and HTTP/S  
+ - UFW firewall configuration for SSH and HTTP/S  
 
 #
 
