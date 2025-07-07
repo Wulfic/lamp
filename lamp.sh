@@ -16,13 +16,26 @@ select ACTION in "Install" "Upgrade" "Uninstall"; do
     esac
 done
 
-# Confirm domain for install/upgrade
+# Prompt for phpMyAdmin/MariaDB username, then password + confirmation, domain, DB engine
 if [[ "$MODE" != "uninstall" ]]; then
-    read -s -p "Enter a default password for MySQL/MariaDB and phpMyAdmin: " DB_PASSWORD
-    echo
+    read -p "Enter the phpMyAdmin/MariaDB username to create: " PMA_USER
+
+    # Prompt for and confirm password
+    while true; do
+        read -s -p "Enter a default password for MySQL/MariaDB and phpMyAdmin: " DB_PASSWORD
+        echo
+        read -s -p "Confirm the password: " DB_PASSWORD_CONFIRM
+        echo
+        if [[ "$DB_PASSWORD" == "$DB_PASSWORD_CONFIRM" ]]; then
+            break
+        else
+            echo "Passwords do not match. Please try again."
+        fi
+    done
+
     read -p "Enter your domain name (e.g., example.com): " DOMAIN
 
-    # Choose database
+    # Choose database engine
     echo "Choose the database engine to install:"
     select db_choice in "MySQL" "MariaDB"; do
         case $db_choice in
@@ -45,11 +58,20 @@ function install_lamp() {
     apt update
     apt upgrade -y
 
+    echo "Installing SSH server..."
+    apt install -y ssh
+
     echo "Installing Apache..."
     apt install -y apache2 apache2-utils
 
-    echo "Installing PHP and modules..."
-    apt install -y php php-cli php-mysql php-gd php-curl php-mbstring php-xml php-zip libapache2-mod-php unzip
+    echo "Installing PHP, modules & PDO..."
+    apt install -y php php-cli php-mysql php-pdo php-gd php-curl php-mbstring php-xml php-zip libapache2-mod-php unzip
+
+    echo "Installing Git & Composer..."
+    apt install -y git composer
+
+    echo "Installing JavaScript runtime (Node.js & npm)..."
+    apt install -y nodejs npm
 
     echo "Installing $DB_ENGINE..."
     if [ "$DB_ENGINE" = "mysql" ]; then
@@ -76,7 +98,6 @@ EOF
     echo "phpmyadmin phpmyadmin/mysql/admin-pass password $DB_PASSWORD" | debconf-set-selections
     echo "phpmyadmin phpmyadmin/mysql/app-pass password $DB_PASSWORD" | debconf-set-selections
     echo "phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2" | debconf-set-selections
-
     apt install -y phpmyadmin
 
     echo "Enabling Apache modules..."
@@ -109,13 +130,34 @@ EOF
     echo "Restarting Apache..."
     systemctl restart apache2
 
+    echo "Creating phpMyAdmin/MariaDB user '$PMA_USER'..."
+    mysql -u root -p"$DB_PASSWORD" <<EOF
+CREATE USER '$PMA_USER'@'localhost'
+  IDENTIFIED BY '$DB_PASSWORD';
+GRANT ALL PRIVILEGES
+  ON *.* TO '$PMA_USER'@'localhost'
+  WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+EOF
+    echo "✅ User '$PMA_USER' created and granted full privileges."
+
+    echo "Installing Pusher & PHPMailer via Composer..."
+    pushd /var/www/html > /dev/null
+      composer require pusher/pusher-php-server phpmailer/phpmailer
+    popd > /dev/null
+
+    echo "Installing Pusher JavaScript SDK..."
+    pushd /var/www/html > /dev/null
+      npm install pusher-js
+    popd > /dev/null
+
     setup_firewall
 
     echo "-------------------------------------------"
     echo "✅ Installation Complete!"
     echo "🌐 Site: https://$DOMAIN"
     echo "🛠 phpMyAdmin: https://$DOMAIN/phpmyadmin"
-    echo "🔐 MySQL root password: [hidden]"
+    echo "🔐 MySQL root password: '$DB_PASSWORD'"
     echo "-------------------------------------------"
 }
 
@@ -123,16 +165,13 @@ function upgrade_lamp() {
     echo "Upgrading packages and reconfiguring services..."
     apt update
     apt upgrade -y
-
-    # Re-run install steps to reconfigure components
     install_lamp
 }
 
 function uninstall_lamp() {
     echo "Uninstalling LAMP stack components..."
-
     systemctl stop apache2 mysql mariadb 2>/dev/null || true
-    apt purge -y apache2 apache2-utils mysql-server mariadb-server phpmyadmin php* certbot ufw
+    apt purge -y apache2 apache2-utils mysql-server mariadb-server phpmyadmin php* certbot ufw ssh nodejs npm git composer
     apt autoremove -y
     apt autoclean
 
@@ -149,7 +188,8 @@ function uninstall_lamp() {
 
 # Execute mode
 case $MODE in
-    install) install_lamp ;;
-    upgrade) upgrade_lamp ;;
+    install)   install_lamp   ;;
+    upgrade)   upgrade_lamp   ;;
     uninstall) uninstall_lamp ;;
 esac
+```
